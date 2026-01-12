@@ -253,7 +253,7 @@ class KalshiDataExporter:
         # Collect categories and tags from series
         for s in series:
             category = s.get("category", "")
-            tags = s.get("tags", [])
+            tags = s.get("tags") or []  # Handle None from API
             
             if category:
                 categories.add(category)
