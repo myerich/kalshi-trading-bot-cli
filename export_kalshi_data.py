@@ -1,8 +1,13 @@
 """
 Kalshi Data Export Script
 
-Fetches all series, events, and markets from Kalshi API and exports them
+Fetches active series, open events, and open markets from Kalshi API and exports them
 to 3 CSV files: markets.csv, events.csv, and contracts.csv.
+
+Only active/open data is fetched (no expired or settled items):
+- Series: status=active
+- Events: status=open
+- Markets: status=open
 """
 
 import asyncio
@@ -77,7 +82,7 @@ class KalshiDataExporter:
             raise
     
     async def fetch_all_series(self) -> List[Dict[str, Any]]:
-        """Fetch all series from Kalshi API with pagination."""
+        """Fetch all active series from Kalshi API with pagination."""
         all_series = []
         cursor = None
         page = 1
@@ -87,6 +92,7 @@ class KalshiDataExporter:
                 headers = await self._get_headers("GET", "/trade-api/v2/series")
                 params = {
                     "limit": 100,
+                    "status": "active",  # Only fetch active series
                 }
                 
                 if cursor:
@@ -124,11 +130,11 @@ class KalshiDataExporter:
                 logger.error(f"Error fetching series page {page}: {e}")
                 break
         
-        logger.info(f"Fetched {len(all_series)} total series from {page} pages")
+        logger.info(f"Fetched {len(all_series)} active series from {page} pages")
         return all_series
     
     async def fetch_all_events(self) -> List[Dict[str, Any]]:
-        """Fetch all events from Kalshi API with pagination."""
+        """Fetch all open (active) events from Kalshi API with pagination."""
         all_events = []
         cursor = None
         page = 1
@@ -138,6 +144,7 @@ class KalshiDataExporter:
                 headers = await self._get_headers("GET", "/trade-api/v2/events")
                 params = {
                     "limit": 100,
+                    "status": "open",  # Only fetch open/active events
                     "with_nested_markets": "false"  # Don't need nested markets for events
                 }
                 
@@ -176,11 +183,11 @@ class KalshiDataExporter:
                 logger.error(f"Error fetching events page {page}: {e}")
                 break
         
-        logger.info(f"Fetched {len(all_events)} total events from {page} pages")
+        logger.info(f"Fetched {len(all_events)} open events from {page} pages")
         return all_events
     
     async def fetch_all_markets(self) -> List[Dict[str, Any]]:
-        """Fetch all markets from Kalshi API with pagination."""
+        """Fetch all open (active) markets from Kalshi API with pagination."""
         all_markets = []
         cursor = None
         page = 1
@@ -190,6 +197,7 @@ class KalshiDataExporter:
                 headers = await self._get_headers("GET", "/trade-api/v2/markets")
                 params = {
                     "limit": 100,
+                    "status": "open",  # Only fetch open/active markets
                 }
                 
                 if cursor:
@@ -227,7 +235,7 @@ class KalshiDataExporter:
                 logger.error(f"Error fetching markets page {page}: {e}")
                 break
         
-        logger.info(f"Fetched {len(all_markets)} total markets from {page} pages")
+        logger.info(f"Fetched {len(all_markets)} open markets from {page} pages")
         return all_markets
     
     def build_markets(self, series: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
