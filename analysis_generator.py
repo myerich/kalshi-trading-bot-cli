@@ -250,7 +250,10 @@ Keep it factual and concise. Do not include speculation."""
         event_url: str,
         event_title: str
     ) -> str:
-        """Summarize market discussion from crawled Kalshi page content.
+        """Summarize market discussion from crawled Kalshi page or web search.
+        
+        If Exa content doesn't have meaningful discussion, falls back to
+        Google Search to find discussions from the wider internet.
         
         Args:
             exa_content: Raw text content from Exa crawl
@@ -260,10 +263,9 @@ Keep it factual and concise. Do not include speculation."""
         Returns:
             2-3 sentence summary of market discussion
         """
-        if not exa_content:
-            return "Limited discussion available for this market."
-        
-        prompt = f"""You are summarizing the market discussion for a Kalshi prediction market: "{event_title}"
+        # First try to extract discussion from Exa content
+        if exa_content and len(exa_content) > 500:
+            prompt = f"""You are summarizing the market discussion for a Kalshi prediction market: "{event_title}"
 
 ## Discussion Content from {event_url}:
 {exa_content[:8000]}
@@ -273,9 +275,33 @@ Summarize in 2-3 sentences:
 2. Key arguments for YES vs NO
 3. Any notable insights or consensus
 
-If no meaningful discussion exists, respond with: "Limited discussion available for this market." """
+If no meaningful discussion exists in the content above, respond with exactly: "NO_DISCUSSION" """
 
-        return await self._gemini_generate(prompt, use_search_grounding=False)
+            result = await self._gemini_generate(prompt, use_search_grounding=False)
+            
+            # If we found discussion, return it
+            if result and "NO_DISCUSSION" not in result:
+                return result
+        
+        # Fallback: Use Google Search to find discussions about this topic
+        logger.info(f"No Kalshi discussion found, searching web for: {event_title}")
+        
+        search_prompt = f"""Search for recent discussions, opinions, and analysis about: "{event_title}"
+
+Look for:
+- Social media discussions (Twitter/X, Reddit, forums)
+- News commentary and expert opinions
+- Prediction market discussions from other platforms
+
+Summarize in 2-3 sentences the main viewpoints and arguments being made about this topic.
+If this is a niche topic with limited discussion, note what experts or analysts are saying about it."""
+
+        result = await self._gemini_generate(search_prompt, use_search_grounding=True)
+        
+        if result:
+            return result
+        
+        return "Limited public discussion available for this market."
     
     async def generate_research_questions(
         self,
@@ -378,12 +404,59 @@ Provide your response in this exact JSON format only, no other text:
                 "paragraph": parsed.get("paragraph", "")
             }
         
-        logger.warning(f"Could not parse JSON from research response, using raw text")
+        # JSON parsing failed - extract structured data from raw response
+        logger.warning(f"Could not parse JSON, extracting data from raw response")
+        
+        # Try to extract key facts from the response for table_data
+        table_data = await self._extract_table_data_from_text(response, question)
+        
         return {
             "subtitle": question[:50],
-            "table_data": [],
+            "table_data": table_data,
             "paragraph": response[:2000] if response else "Research data not available."
         }
+    
+    async def _extract_table_data_from_text(
+        self,
+        text: str,
+        question: str
+    ) -> List[Dict[str, str]]:
+        """Extract key data points from unstructured text.
+        
+        Args:
+            text: Raw text response
+            question: The original question for context
+            
+        Returns:
+            List of {label, value} dicts
+        """
+        if not text or len(text) < 100:
+            return []
+        
+        prompt = f"""Extract 3 key data points from this text as JSON.
+
+Question context: {question}
+
+Text:
+{text[:2000]}
+
+Return ONLY a JSON array with exactly 3 items, no other text:
+[{{"label": "Key fact 1 name", "value": "Specific data with source"}}, {{"label": "Key fact 2 name", "value": "Specific data with source"}}, {{"label": "Key fact 3 name", "value": "Specific data with source"}}]"""
+
+        result = await self._gemini_generate(prompt, use_search_grounding=False)
+        
+        # Try to parse the array
+        if result:
+            try:
+                # Find array in response
+                start = result.find('[')
+                end = result.rfind(']') + 1
+                if start >= 0 and end > start:
+                    return json.loads(result[start:end])
+            except json.JSONDecodeError:
+                pass
+        
+        return []
     
     async def research_what_could_change(
         self,
@@ -905,7 +978,7 @@ Use clear, professional language. Be specific with data points. Format for reada
         analysis["edge_pp"] = f"{edge:.1f}"
         analysis["expected_return"] = f"{expected_return:.1f}"
         analysis["r_score"] = f"{r_score:.2f}"
-        analysis["key_takeaway"] = key_takeaway
+        analysis["executive_verdict"] = key_takeaway  # One-line summary/verdict
         analysis["executive_summary_richtext"] = executive_summary
         
         logger.info(f"Completed analysis for {event_ticker}")

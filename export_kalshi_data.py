@@ -603,7 +603,7 @@ class KalshiDataExporter:
         "analysis-last-updated",
         "confidence-score", "model-probability", "market-probability",
         "edge-pp", "expected-return", "r-score",
-        "executive-summary-richtext",
+        "executive-verdict", "executive-summary-richtext",
         "kalshi-event-url", "contract-snapshot-summary", "market-discussion-summary",
         "q1-subtitle", "q1-table-richtext", "q1-paragraph-richtext",
         "q2-subtitle", "q2-table-richtext", "q2-paragraph-richtext",
@@ -645,6 +645,7 @@ class KalshiDataExporter:
         
         # Required fields that indicate analysis was run
         analysis_fields = [
+            'executive-verdict',
             'executive-summary-richtext',
             'model-probability',
             'q1-subtitle',
