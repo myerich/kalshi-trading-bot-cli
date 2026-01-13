@@ -16,6 +16,75 @@ from config import GeminiConfig, ExaConfig, OctagonConfig
 from research_client import OctagonClient
 
 
+def clean_markdown_response(text: str) -> str:
+    """Clean markdown artifacts from LLM responses.
+    
+    Removes code blocks, excessive whitespace, and converts markdown to HTML.
+    
+    Args:
+        text: Raw text from LLM
+        
+    Returns:
+        Cleaned text suitable for richtext fields
+    """
+    if not text:
+        return ""
+    
+    # Remove code block markers (```json, ```, etc.)
+    text = re.sub(r'```\w*\n?', '', text)
+    text = re.sub(r'```', '', text)
+    
+    # Convert markdown bold **text** to HTML <strong>
+    text = re.sub(r'\*\*([^*]+)\*\*', r'<strong>\1</strong>', text)
+    
+    # Convert markdown italic *text* to HTML <em>
+    text = re.sub(r'\*([^*]+)\*', r'<em>\1</em>', text)
+    
+    # Convert markdown headers to HTML
+    text = re.sub(r'^### (.+)$', r'<h3>\1</h3>', text, flags=re.MULTILINE)
+    text = re.sub(r'^## (.+)$', r'<h2>\1</h2>', text, flags=re.MULTILINE)
+    text = re.sub(r'^# (.+)$', r'<h1>\1</h1>', text, flags=re.MULTILINE)
+    
+    # Convert markdown links [text](url) to HTML
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', text)
+    
+    # Convert line breaks to paragraphs (double newline = new paragraph)
+    paragraphs = text.strip().split('\n\n')
+    if len(paragraphs) > 1:
+        text = ''.join(f'<p>{p.strip()}</p>' for p in paragraphs if p.strip())
+    
+    # Clean up excessive whitespace
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+    
+    return text
+
+
+def format_table_html(table_data: List[Dict[str, str]]) -> str:
+    """Format table data as an HTML table.
+    
+    Args:
+        table_data: List of {label, value} dicts
+        
+    Returns:
+        HTML table string
+    """
+    if not table_data:
+        return ""
+    
+    rows = []
+    for item in table_data:
+        label = item.get('label', '')
+        value = item.get('value', '')
+        if label or value:
+            rows.append(f'<tr><td><strong>{label}</strong></td><td>{value}</td></tr>')
+    
+    if not rows:
+        return ""
+    
+    return f'<table><tbody>{"".join(rows)}</tbody></table>'
+
+
 def parse_json_safely(text: str) -> Optional[Dict[str, Any]]:
     """Parse JSON from text, handling common issues with LLM output.
     
@@ -899,8 +968,8 @@ Use clear, professional language. Be specific with data points. Format for reada
             contract_summary_task, discussion_summary_task
         )
         
-        analysis["contract_snapshot_summary"] = contract_summary
-        analysis["market_discussion_summary"] = discussion_summary
+        analysis["contract_snapshot_summary"] = clean_markdown_response(contract_summary)
+        analysis["market_discussion_summary"] = clean_markdown_response(discussion_summary)
         
         # Phase 3: Research each question sequentially (to avoid rate limits)
         logger.info(f"Phase 3: Researching questions for {event_ticker}")
@@ -918,15 +987,13 @@ Use clear, professional language. Be specific with data points. Format for reada
                 # Store in analysis
                 analysis[f"q{i}_subtitle"] = finding.get("subtitle", question[:50])
                 
-                # Format table data as rich text
+                # Format table data as HTML table
                 table_data = finding.get("table_data", [])
-                if table_data:
-                    table_rows = [f"**{item.get('label', '')}:** {item.get('value', '')}" for item in table_data]
-                    analysis[f"q{i}_table_richtext"] = "\n".join(table_rows)
-                else:
-                    analysis[f"q{i}_table_richtext"] = ""
+                analysis[f"q{i}_table_richtext"] = format_table_html(table_data)
                 
-                analysis[f"q{i}_paragraph_richtext"] = finding.get("paragraph", "")
+                # Clean and format paragraph as HTML
+                paragraph = finding.get("paragraph", "")
+                analysis[f"q{i}_paragraph_richtext"] = clean_markdown_response(paragraph)
                 
                 # Small delay between questions to avoid rate limits
                 await asyncio.sleep(2)
@@ -943,12 +1010,14 @@ Use clear, professional language. Be specific with data points. Format for reada
             event_title, market_probability, close_time
         )
         analysis["what_could_change_subtitle"] = what_could_change.get("subtitle", "Key Catalysts")
-        analysis["what_could_change_paragraph_richtext"] = what_could_change.get("paragraph", "")
+        analysis["what_could_change_paragraph_richtext"] = clean_markdown_response(
+            what_could_change.get("paragraph", "")
+        )
         
         # Add transparency section
         transparency = self.generate_transparency_section()
         analysis["transparency_subtitle"] = transparency["subtitle"]
-        analysis["transparency_paragraph_richtext"] = transparency["paragraph"]
+        analysis["transparency_paragraph_richtext"] = clean_markdown_response(transparency["paragraph"])
         
         # Phase 5: Generate executive summary and key takeaway
         logger.info(f"Phase 5: Generating executive summary for {event_ticker}")
@@ -978,8 +1047,8 @@ Use clear, professional language. Be specific with data points. Format for reada
         analysis["edge_pp"] = f"{edge:.1f}"
         analysis["expected_return"] = f"{expected_return:.1f}"
         analysis["r_score"] = f"{r_score:.2f}"
-        analysis["executive_verdict"] = key_takeaway  # One-line summary/verdict
-        analysis["executive_summary_richtext"] = executive_summary
+        analysis["executive_verdict"] = clean_markdown_response(key_takeaway)  # One-line summary/verdict
+        analysis["executive_summary_richtext"] = clean_markdown_response(executive_summary)
         
         logger.info(f"Completed analysis for {event_ticker}")
         
