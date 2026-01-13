@@ -13,6 +13,7 @@ Only active/open data is exported (no expired or settled items):
 import asyncio
 import csv
 import json
+import re
 import time
 import base64
 from datetime import datetime
@@ -23,7 +24,28 @@ from loguru import logger
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.backends import default_backend
-from config import KalshiConfig, load_config
+from config import KalshiConfig, WebflowConfig, load_config
+
+
+def slugify(text: str) -> str:
+    """Convert text to URL-safe slug.
+    
+    Examples:
+        "Companies" -> "companies"
+        "Science and Technology" -> "science-and-technology"
+        "Companies - AI" -> "companies-ai"
+    """
+    if not text:
+        return ""
+    # Lowercase
+    slug = text.lower()
+    # Replace spaces and special chars with hyphens
+    slug = re.sub(r'[^a-z0-9]+', '-', slug)
+    # Remove leading/trailing hyphens
+    slug = slug.strip('-')
+    # Collapse multiple hyphens
+    slug = re.sub(r'-+', '-', slug)
+    return slug
 
 
 # Hardcoded categories to filter events by
@@ -38,15 +60,17 @@ ALLOWED_CATEGORIES = {
 
 
 class KalshiDataExporter:
-    """Exports Kalshi data to CSV files."""
+    """Exports Kalshi data to CSV files and syncs to Webflow CMS."""
     
-    def __init__(self, config: KalshiConfig):
+    def __init__(self, config: KalshiConfig, webflow_config: Optional[WebflowConfig] = None):
         self.config = config
+        self.webflow_config = webflow_config
         # Force real API (not demo) since this is read-only
         self.base_url = "https://api.elections.kalshi.com"
         self.api_key = config.api_key
         self.private_key = config.private_key
         self.client = None
+        self.webflow_client = None
         
     async def _get_headers(self, method: str, path: str) -> Dict[str, str]:
         """Generate headers with RSA signature."""
@@ -498,6 +522,307 @@ class KalshiDataExporter:
         
         logger.info(f"Wrote {len(rows)} rows to {filepath}")
     
+    # ==================== Webflow API Methods ====================
+    
+    async def _init_webflow_client(self):
+        """Initialize Webflow HTTP client."""
+        if not self.webflow_config or not self.webflow_config.is_configured:
+            return False
+        
+        self.webflow_client = httpx.AsyncClient(
+            base_url="https://api.webflow.com/v2",
+            headers={
+                "Authorization": f"Bearer {self.webflow_config.api_token}",
+                "Content-Type": "application/json",
+                "accept": "application/json",
+            },
+            timeout=60.0
+        )
+        return True
+    
+    async def _close_webflow_client(self):
+        """Close Webflow HTTP client."""
+        if self.webflow_client:
+            await self.webflow_client.aclose()
+            self.webflow_client = None
+    
+    async def fetch_webflow_items(self, collection_id: str) -> Dict[str, dict]:
+        """Fetch all items from Webflow collection, return as slug -> item dict."""
+        items_by_slug = {}
+        offset = 0
+        limit = 100
+        
+        while True:
+            try:
+                response = await self.webflow_client.get(
+                    f"/collections/{collection_id}/items",
+                    params={"offset": offset, "limit": limit}
+                )
+                response.raise_for_status()
+                
+                data = response.json()
+                items = data.get("items", [])
+                
+                for item in items:
+                    field_data = item.get("fieldData", {})
+                    slug = field_data.get("slug", "")
+                    if slug:
+                        items_by_slug[slug] = {
+                            "id": item.get("id"),
+                            "fieldData": field_data
+                        }
+                
+                # Check if there are more pages
+                pagination = data.get("pagination", {})
+                total = pagination.get("total", 0)
+                if offset + limit >= total:
+                    break
+                offset += limit
+                
+                # Rate limiting - 1 second delay between requests
+                await asyncio.sleep(1)
+                
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429:
+                    # Rate limited - wait and retry
+                    logger.warning("Webflow rate limited, waiting 60 seconds...")
+                    await asyncio.sleep(60)
+                    continue
+                logger.error(f"Error fetching Webflow items: {e}")
+                break
+            except Exception as e:
+                logger.error(f"Error fetching Webflow items: {e}")
+                break
+        
+        logger.info(f"Fetched {len(items_by_slug)} existing items from Webflow collection {collection_id}")
+        return items_by_slug
+    
+    async def create_webflow_item(self, collection_id: str, field_data: dict) -> Optional[str]:
+        """Create a new Webflow CMS item and publish it. Returns item ID."""
+        try:
+            response = await self.webflow_client.post(
+                f"/collections/{collection_id}/items/live",
+                json={"fieldData": field_data}
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            item_id = data.get("id")
+            logger.info(f"Created Webflow item: {field_data.get('slug', 'unknown')} -> {item_id}")
+            
+            # Rate limiting
+            await asyncio.sleep(1)
+            return item_id
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                logger.warning("Webflow rate limited, waiting 60 seconds...")
+                await asyncio.sleep(60)
+                return await self.create_webflow_item(collection_id, field_data)
+            logger.error(f"Error creating Webflow item: {e.response.text}")
+            return None
+        except Exception as e:
+            logger.error(f"Error creating Webflow item: {e}")
+            return None
+    
+    async def update_webflow_item(self, collection_id: str, item_id: str, field_data: dict) -> bool:
+        """Update an existing Webflow CMS item and publish it."""
+        try:
+            response = await self.webflow_client.patch(
+                f"/collections/{collection_id}/items/live",
+                json={"items": [{"id": item_id, "fieldData": field_data}]}
+            )
+            response.raise_for_status()
+            
+            logger.info(f"Updated Webflow item: {field_data.get('slug', item_id)}")
+            
+            # Rate limiting
+            await asyncio.sleep(1)
+            return True
+            
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                logger.warning("Webflow rate limited, waiting 60 seconds...")
+                await asyncio.sleep(60)
+                return await self.update_webflow_item(collection_id, item_id, field_data)
+            logger.error(f"Error updating Webflow item: {e.response.text}")
+            return False
+        except Exception as e:
+            logger.error(f"Error updating Webflow item: {e}")
+            return False
+    
+    async def upsert_webflow_item(
+        self, 
+        collection_id: str, 
+        existing_items: Dict[str, dict], 
+        field_data: dict
+    ) -> Optional[str]:
+        """Create or update a Webflow CMS item based on slug. Returns item ID."""
+        slug = field_data.get("slug", "")
+        
+        if slug in existing_items:
+            # Update existing item
+            item_id = existing_items[slug]["id"]
+            success = await self.update_webflow_item(collection_id, item_id, field_data)
+            return item_id if success else None
+        else:
+            # Create new item
+            return await self.create_webflow_item(collection_id, field_data)
+    
+    async def sync_markets_to_webflow(self, markets_rows: List[Dict[str, Any]]) -> Dict[str, str]:
+        """Sync market pages to Webflow CMS.
+        
+        Markets are browse pages based on category/tag combinations.
+        Category pages are created first, then tag pages with parent_page references.
+        
+        Returns: slug -> webflow_id mapping
+        """
+        if not self.webflow_config or not self.webflow_config.is_configured:
+            logger.warning("Webflow not configured, skipping market sync")
+            return {}
+        
+        collection_id = self.webflow_config.markets_collection_id
+        slug_to_id: Dict[str, str] = {}
+        
+        # Fetch existing items
+        existing_items = await self.fetch_webflow_items(collection_id)
+        
+        # Separate category pages (no parent) and tag pages (have parent)
+        category_pages = []
+        tag_pages = []
+        
+        for market in markets_rows:
+            category = market.get("series_category_filter", "")
+            tag = market.get("series_tag_filter", "")
+            
+            if tag:
+                # Tag page (has parent)
+                tag_pages.append(market)
+            else:
+                # Category page (no parent)
+                category_pages.append(market)
+        
+        logger.info(f"Syncing {len(category_pages)} category pages and {len(tag_pages)} tag pages to Webflow")
+        
+        # First pass: Upsert category pages (no parent_page reference)
+        for market in category_pages:
+            category = market.get("series_category_filter", "")
+            slug = slugify(category)
+            name = category  # Use category name as display name
+            
+            field_data = {
+                "name": name,
+                "slug": slug,
+                "series-category-filter": category,
+                "series-tag-filter": "",
+            }
+            
+            item_id = await self.upsert_webflow_item(collection_id, existing_items, field_data)
+            if item_id:
+                slug_to_id[slug] = item_id
+                # Also add to existing_items for reference resolution
+                existing_items[slug] = {"id": item_id, "fieldData": field_data}
+        
+        # Second pass: Upsert tag pages (with parent_page reference)
+        for market in tag_pages:
+            category = market.get("series_category_filter", "")
+            tag = market.get("series_tag_filter", "")
+            
+            # Generate slug for tag page
+            slug = slugify(f"{category}-{tag}")
+            name = f"{category} - {tag}"
+            
+            # Look up parent category's Webflow ID
+            parent_slug = slugify(category)
+            parent_id = slug_to_id.get(parent_slug)
+            
+            field_data = {
+                "name": name,
+                "slug": slug,
+                "series-category-filter": category,
+                "series-tag-filter": tag,
+            }
+            
+            # Add parent_page reference if parent exists
+            if parent_id:
+                field_data["parent-page"] = parent_id
+            
+            item_id = await self.upsert_webflow_item(collection_id, existing_items, field_data)
+            if item_id:
+                slug_to_id[slug] = item_id
+        
+        logger.info(f"Synced {len(slug_to_id)} market pages to Webflow")
+        return slug_to_id
+    
+    async def sync_events_to_webflow(
+        self, 
+        events_rows: List[Dict[str, Any]], 
+        market_id_map: Dict[str, str]
+    ) -> int:
+        """Sync events to Webflow CMS with market_page references.
+        
+        Each event is linked to a market page based on its series_category.
+        
+        Args:
+            events_rows: List of event data dictionaries
+            market_id_map: Mapping of market slug -> webflow_id
+            
+        Returns: Number of events synced
+        """
+        if not self.webflow_config or not self.webflow_config.is_configured:
+            logger.warning("Webflow not configured, skipping event sync")
+            return 0
+        
+        collection_id = self.webflow_config.events_collection_id
+        synced_count = 0
+        
+        # Fetch existing items
+        existing_items = await self.fetch_webflow_items(collection_id)
+        
+        logger.info(f"Syncing {len(events_rows)} events to Webflow")
+        
+        for event in events_rows:
+            event_ticker = event.get("event_ticker", "")
+            event_name = event.get("name", "")
+            series_category = event.get("series_category", "")
+            
+            # Generate slug from event_ticker
+            slug = slugify(event_ticker) if event_ticker else slugify(event_name)
+            
+            if not slug:
+                logger.warning(f"Skipping event with no valid slug: {event}")
+                continue
+            
+            # Find the market page to reference
+            # First try category slug, then fall back to just category
+            market_slug = slugify(series_category)
+            market_id = market_id_map.get(market_slug)
+            
+            # Build field data for Webflow
+            field_data = {
+                "name": event_name,
+                "slug": slug,
+                "event-ticker": event_ticker,
+                "series-ticker": event.get("series_ticker", ""),
+                "subtitle": event.get("subtitle", ""),
+                "series-category": series_category,
+                "strike-date": event.get("strike_date", ""),
+                "strike-period": event.get("strike_period", ""),
+            }
+            
+            # Add market_page reference if market exists
+            if market_id:
+                field_data["market-page"] = market_id
+            
+            item_id = await self.upsert_webflow_item(collection_id, existing_items, field_data)
+            if item_id:
+                synced_count += 1
+                # Update existing_items cache
+                existing_items[slug] = {"id": item_id, "fieldData": field_data}
+        
+        logger.info(f"Synced {synced_count} events to Webflow")
+        return synced_count
+    
     async def export(self):
         """Main export function."""
         # Initialize HTTP client
@@ -623,7 +948,27 @@ class KalshiDataExporter:
             self.write_csv(f"events_{timestamp}.csv", events_rows, events_fields)
             self.write_csv(f"contracts_{timestamp}.csv", contracts_rows, contracts_fields)
             
-            logger.info("Export completed successfully!")
+            logger.info("CSV export completed successfully!")
+            
+            # Sync to Webflow CMS
+            if self.webflow_config and self.webflow_config.is_configured:
+                logger.info("Syncing to Webflow CMS...")
+                
+                # Initialize Webflow client
+                await self._init_webflow_client()
+                
+                try:
+                    # Sync markets (browse pages) first to get ID mapping
+                    market_id_map = await self.sync_markets_to_webflow(markets_rows)
+                    
+                    # Sync events with market_page references
+                    await self.sync_events_to_webflow(events_rows, market_id_map)
+                    
+                    logger.info("Webflow sync completed successfully!")
+                finally:
+                    await self._close_webflow_client()
+            else:
+                logger.info("Webflow not configured, skipping sync. Set WEBFLOW_* env vars to enable.")
             
         finally:
             await self.client.aclose()
@@ -632,7 +977,7 @@ class KalshiDataExporter:
 async def main():
     """Main entry point."""
     config = load_config()
-    exporter = KalshiDataExporter(config.kalshi)
+    exporter = KalshiDataExporter(config.kalshi, config.webflow)
     await exporter.export()
 
 

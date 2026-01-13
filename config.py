@@ -69,6 +69,20 @@ class OpenAIConfig(BaseModel):
             raise ValueError("OPENAI_API_KEY is required. Please set it in your .env file.")
         return v
 
+
+class WebflowConfig(BaseModel):
+    """Webflow API configuration."""
+    api_token: str = Field(default="", description="Webflow API token")
+    site_id: str = Field(default="", description="Webflow site ID")
+    markets_collection_id: str = Field(default="", description="Markets collection ID")
+    events_collection_id: str = Field(default="", description="Events collection ID")
+    
+    @property
+    def is_configured(self) -> bool:
+        """Check if Webflow is configured."""
+        return bool(self.api_token and self.site_id and self.markets_collection_id and self.events_collection_id)
+
+
 def _clean_env_value(value: str) -> str:
     """Clean environment variable value by removing inline comments."""
     # Split on '#' and take the first part, then strip whitespace
@@ -82,6 +96,7 @@ class BotConfig(BaseSettings):
     kalshi: KalshiConfig = Field(..., description="Kalshi configuration")
     octagon: OctagonConfig = Field(..., description="Octagon configuration")
     openai: OpenAIConfig = Field(..., description="OpenAI configuration")
+    webflow: WebflowConfig = Field(default_factory=WebflowConfig, description="Webflow configuration")
     
     # Bot settings
     dry_run: bool = Field(default=True, description="Run in dry-run mode (overridden by CLI)")
@@ -141,10 +156,18 @@ class BotConfig(BaseSettings):
             model=os.getenv("OPENAI_MODEL", "gpt-5")
         )
         
+        webflow_config = WebflowConfig(
+            api_token=os.getenv("WEBFLOW_API_TOKEN", ""),
+            site_id=os.getenv("WEBFLOW_SITE_ID", ""),
+            markets_collection_id=os.getenv("WEBFLOW_MARKETS_COLLECTION_ID", ""),
+            events_collection_id=os.getenv("WEBFLOW_EVENTS_COLLECTION_ID", "")
+        )
+        
         data.update({
             "kalshi": kalshi_config,
             "octagon": octagon_config,
             "openai": openai_config,
+            "webflow": webflow_config,
             "dry_run": True,  # Default to dry run, overridden by CLI
             "max_bet_amount": float(_clean_env_value(os.getenv("MAX_BET_AMOUNT", "100.0"))),
             "max_events_to_analyze": int(_clean_env_value(os.getenv("MAX_EVENTS_TO_ANALYZE", "50"))),

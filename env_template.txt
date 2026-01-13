@@ -33,6 +33,20 @@ OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-5
 
 # =============================================================================
+# WEBFLOW CMS CONFIGURATION (Optional)
+# =============================================================================
+
+# Webflow API token (get from Site Settings > Integrations > API Access)
+WEBFLOW_API_TOKEN=your_webflow_api_token_here
+
+# Webflow Site ID (from dashboard URL or API)
+WEBFLOW_SITE_ID=your_site_id_here
+
+# Collection IDs for Markets and Events
+WEBFLOW_MARKETS_COLLECTION_ID=your_markets_collection_id_here
+WEBFLOW_EVENTS_COLLECTION_ID=your_events_collection_id_here
+
+# =============================================================================
 # BOT CONFIGURATION
 # =============================================================================
 
