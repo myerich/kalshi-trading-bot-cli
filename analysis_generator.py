@@ -11,9 +11,42 @@ import re
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from config import GeminiConfig, ExaConfig, OctagonConfig
 from research_client import OctagonClient
+
+
+# ============================================================================
+# Pydantic Models for Structured Outputs
+# ============================================================================
+
+class ResearchQuestions(BaseModel):
+    """Five research questions for a prediction market."""
+    q1: str = Field(description="Direct question about the outcome")
+    q2: str = Field(description="Question about recent news or developments")
+    q3: str = Field(description="Question about expert predictions or forecasts")
+    q4: str = Field(description="Question about key data, statistics, or indicators")
+    q5: str = Field(description="Question about timeline or upcoming events")
+
+
+class TableDataItem(BaseModel):
+    """A single data point for a table."""
+    label: str = Field(description="Name of the metric or data point")
+    value: str = Field(description="Value with source attribution")
+
+
+class QuestionResearch(BaseModel):
+    """Research findings for a single question."""
+    subtitle: str = Field(description="A concise 5-10 word title for this research section")
+    table_data: List[TableDataItem] = Field(description="3 key data points with sources")
+    paragraph: str = Field(description="2-3 paragraph analysis with citations")
+
+
+class CatalystResearch(BaseModel):
+    """Key catalysts that could change market probability."""
+    subtitle: str = Field(description="Section title, e.g., 'Key Catalysts'")
+    paragraph: str = Field(description="2-3 paragraphs on bullish/bearish catalysts with dates")
 
 
 def clean_markdown_response(text: str) -> str:
@@ -285,6 +318,56 @@ class AnalysisGenerator:
             logger.error(f"Error generating content with Gemini: {e}")
             return ""
     
+    async def _gemini_generate_structured(
+        self,
+        prompt: str,
+        response_schema: type[BaseModel],
+        use_search_grounding: bool = False
+    ) -> Optional[BaseModel]:
+        """Generate structured content using Gemini with JSON schema.
+        
+        Uses Gemini's structured output feature to guarantee valid JSON
+        that matches the provided Pydantic schema.
+        
+        Args:
+            prompt: The prompt to send to Gemini
+            response_schema: Pydantic model class defining the expected output
+            use_search_grounding: Whether to use Google Search for grounding
+            
+        Returns:
+            Parsed Pydantic model instance, or None if generation fails
+        """
+        client = self._init_gemini()
+        if not client:
+            logger.warning("Gemini not configured, skipping generation")
+            return None
+        
+        try:
+            from google.genai import types
+            
+            config_kwargs = {
+                "response_mime_type": "application/json",
+                "response_json_schema": response_schema.model_json_schema(),
+            }
+            
+            if use_search_grounding:
+                config_kwargs["tools"] = [
+                    types.Tool(google_search=types.GoogleSearch())
+                ]
+            
+            response = client.models.generate_content(
+                model=self.gemini_config.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(**config_kwargs)
+            )
+            
+            # Parse and validate against the schema
+            return response_schema.model_validate_json(response.text)
+            
+        except Exception as e:
+            logger.error(f"Error generating structured content with Gemini: {e}")
+            return None
+    
     async def summarize_contract_rules(
         self,
         exa_content: str,
@@ -387,6 +470,8 @@ If this is a niche topic with limited discussion, note what experts or analysts 
     ) -> Dict[str, str]:
         """Generate 5 research questions using Gemini with Google Search grounding.
         
+        Uses Gemini's structured output feature to guarantee valid JSON.
+        
         Args:
             event_title: Title of the event
             event_subtitle: Subtitle of the event
@@ -403,37 +488,37 @@ Subtitle: {event_subtitle}
 Category: {series_category}
 Current market odds: {market_probability:.1f}% YES
 
-First, search Google to understand what questions and topics people are currently searching for related to this market topic. Look at:
-- Related searches and "People also ask" style questions
-- News headlines and common angles being covered
-- What information people are seeking about this topic
+Search Google to understand what questions and topics people are currently searching for related to this market topic. Look at related searches, news headlines, and common angles being covered.
 
-Then generate exactly 5 questions that align with real search demand. These should be questions people are actively searching for online.
+Generate exactly 5 questions that align with real search demand - questions people are actively searching for online.
 
 Requirements:
 - Use natural, conversational phrasing (how people actually search)
 - Include specific names, dates, or terms from the market title
-- Align with actual search trends you found
 - Each question should be standalone and searchable
 
-Guidelines:
-- Q1: A direct question about the outcome (e.g., "Will X happen?")
-- Q2: A question about recent news or developments (based on current headlines)
-- Q3: A question about predictions or forecasts from experts/analysts
-- Q4: A question about key data, statistics, or indicators
-- Q5: A question about timeline or upcoming events
+Guidelines for each question:
+- q1: Direct question about the outcome (e.g., "Will X happen?")
+- q2: Question about recent news or developments
+- q3: Question about expert predictions or forecasts
+- q4: Question about key data, statistics, or indicators
+- q5: Question about timeline or upcoming events"""
 
-Format your response as JSON only, no other text:
-{{"q1": "Direct outcome question...", "q2": "Recent news question...", "q3": "Expert prediction question...", "q4": "Data/statistics question...", "q5": "Timeline/events question..."}}"""
-
-        response = await self._gemini_generate(prompt, use_search_grounding=True)
+        result = await self._gemini_generate_structured(
+            prompt, ResearchQuestions, use_search_grounding=True
+        )
         
-        # Parse JSON from response using robust parser
-        parsed = parse_json_safely(response)
-        if parsed and all(f"q{i}" in parsed for i in range(1, 6)):
-            return parsed
+        if result:
+            return {
+                "q1": result.q1,
+                "q2": result.q2,
+                "q3": result.q3,
+                "q4": result.q4,
+                "q5": result.q5,
+            }
         
-        logger.warning(f"Could not parse JSON from question generation response: {response[:200]}")
+        # Fallback if structured output fails
+        logger.warning("Structured output failed for questions, using defaults")
         return {
             "q1": f"Will {event_title}?",
             "q2": f"What is the latest news about {event_title}?",
@@ -450,6 +535,8 @@ Format your response as JSON only, no other text:
     ) -> Dict[str, Any]:
         """Research a single question using Gemini with Google Search grounding.
         
+        Uses Gemini's structured output feature to guarantee valid JSON.
+        
         Args:
             question: The research question to answer
             event_title: Title of the event
@@ -464,74 +551,31 @@ Context: This research is for the prediction market "{event_title}" which resolv
 
 Search for current, authoritative information to answer this question thoroughly.
 
-Provide your response in this exact JSON format only, no other text:
-{{"subtitle": "A concise 5-10 word title for this research section", "table_data": [{{"label": "Key Metric 1", "value": "Data point with source"}}, {{"label": "Key Metric 2", "value": "Data point with source"}}, {{"label": "Key Metric 3", "value": "Data point with source"}}], "paragraph": "2-3 paragraph analysis with inline citations [Source Name]. Explain what the data means for the prediction market outcome. Be specific and cite your sources."}}"""
+Provide:
+- A concise 5-10 word subtitle for this research section
+- Exactly 3 key data points with their sources
+- A 2-3 paragraph analysis with inline citations [Source Name] explaining what the data means for the prediction market outcome"""
 
-        response = await self._gemini_generate(prompt, use_search_grounding=True)
+        result = await self._gemini_generate_structured(
+            prompt, QuestionResearch, use_search_grounding=True
+        )
         
-        # Parse JSON from response using robust parser
-        parsed = parse_json_safely(response)
-        if parsed and "subtitle" in parsed:
-            # Ensure required keys exist
+        if result:
             return {
-                "subtitle": parsed.get("subtitle", question[:50]),
-                "table_data": parsed.get("table_data", []),
-                "paragraph": parsed.get("paragraph", "")
+                "subtitle": result.subtitle,
+                "table_data": [{"label": item.label, "value": item.value} for item in result.table_data],
+                "paragraph": result.paragraph
             }
         
-        # JSON parsing failed - extract structured data from raw response
-        logger.warning(f"Could not parse JSON, extracting data from raw response")
-        
-        # Try to extract key facts from the response for table_data
-        table_data = await self._extract_table_data_from_text(response, question)
+        # Fallback: try unstructured generation
+        logger.warning("Structured output failed for question research, using fallback")
+        response = await self._gemini_generate(prompt, use_search_grounding=True)
         
         return {
             "subtitle": question[:50],
-            "table_data": table_data,
-            "paragraph": response[:2000] if response else "Research data not available."
+            "table_data": [],
+            "paragraph": clean_markdown_response(response) if response else "Research data not available."
         }
-    
-    async def _extract_table_data_from_text(
-        self,
-        text: str,
-        question: str
-    ) -> List[Dict[str, str]]:
-        """Extract key data points from unstructured text.
-        
-        Args:
-            text: Raw text response
-            question: The original question for context
-            
-        Returns:
-            List of {label, value} dicts
-        """
-        if not text or len(text) < 100:
-            return []
-        
-        prompt = f"""Extract 3 key data points from this text as JSON.
-
-Question context: {question}
-
-Text:
-{text[:2000]}
-
-Return ONLY a JSON array with exactly 3 items, no other text:
-[{{"label": "Key fact 1 name", "value": "Specific data with source"}}, {{"label": "Key fact 2 name", "value": "Specific data with source"}}, {{"label": "Key fact 3 name", "value": "Specific data with source"}}]"""
-
-        result = await self._gemini_generate(prompt, use_search_grounding=False)
-        
-        # Try to parse the array
-        if result:
-            try:
-                # Find array in response
-                start = result.find('[')
-                end = result.rfind(']') + 1
-                if start >= 0 and end > start:
-                    return json.loads(result[start:end])
-            except json.JSONDecodeError:
-                pass
-        
-        return []
     
     async def research_what_could_change(
         self,
@@ -540,6 +584,8 @@ Return ONLY a JSON array with exactly 3 items, no other text:
         close_time: str
     ) -> Dict[str, str]:
         """Research key catalysts that could change the market.
+        
+        Uses Gemini's structured output feature to guarantee valid JSON.
         
         Args:
             event_title: Title of the event
@@ -555,22 +601,29 @@ Settlement date: {close_time}
 
 Research and identify the key catalysts or events that could significantly change the probability of this market.
 
-Provide your response in this exact JSON format only, no other text:
-{{"subtitle": "Key Catalysts", "paragraph": "2-3 paragraphs describing:\\n\\n**Bullish catalysts (could push YES higher):**\\n- Specific events, announcements, or data releases\\n- Include dates if known\\n\\n**Bearish catalysts (could push NO higher):**\\n- Specific events, announcements, or data releases\\n- Include dates if known\\n\\n**Timeline:** Key dates to watch before settlement.\\n\\nCite sources for any scheduled events or announcements."}}"""
+Include in your paragraph:
+- Bullish catalysts (could push YES higher) with specific events and dates
+- Bearish catalysts (could push NO higher) with specific events and dates
+- Timeline of key dates to watch before settlement
+- Cite sources for any scheduled events or announcements"""
 
-        response = await self._gemini_generate(prompt, use_search_grounding=True)
+        result = await self._gemini_generate_structured(
+            prompt, CatalystResearch, use_search_grounding=True
+        )
         
-        # Parse JSON from response using robust parser
-        parsed = parse_json_safely(response)
-        if parsed and "paragraph" in parsed:
+        if result:
             return {
-                "subtitle": parsed.get("subtitle", "Key Catalysts"),
-                "paragraph": parsed.get("paragraph", "")
+                "subtitle": result.subtitle,
+                "paragraph": result.paragraph
             }
+        
+        # Fallback
+        logger.warning("Structured output failed for catalysts, using fallback")
+        response = await self._gemini_generate(prompt, use_search_grounding=True)
         
         return {
             "subtitle": "Key Catalysts",
-            "paragraph": response[:2000] if response else "Catalyst analysis not available."
+            "paragraph": clean_markdown_response(response) if response else "Catalyst analysis not available."
         }
     
     def generate_transparency_section(self) -> Dict[str, str]:
