@@ -774,11 +774,20 @@ class KalshiDataExporter:
         
         logger.info(f"Syncing {len(category_pages)} category pages and {len(tag_pages)} tag pages to Webflow")
         
-        # First pass: Upsert category pages (no parent_page reference)
+        inserted_count = 0
+        skipped_count = 0
+        
+        # First pass: Insert category pages if they don't exist (no parent_page reference)
         for market in category_pages:
             category = market.get("series_category_filter", "")
             slug = slugify(category)
             name = category  # Use category name as display name
+            
+            # Skip if already exists
+            if slug in existing_items:
+                slug_to_id[slug] = existing_items[slug]["id"]
+                skipped_count += 1
+                continue
             
             field_data = {
                 "name": name,
@@ -787,13 +796,13 @@ class KalshiDataExporter:
                 "series-tag-filter": "",
             }
             
-            item_id = await self.upsert_webflow_item(collection_id, existing_items, field_data)
+            item_id = await self.create_webflow_item(collection_id, field_data)
             if item_id:
                 slug_to_id[slug] = item_id
-                # Also add to existing_items for reference resolution
                 existing_items[slug] = {"id": item_id, "fieldData": field_data}
+                inserted_count += 1
         
-        # Second pass: Upsert tag pages (with parent_page reference)
+        # Second pass: Insert tag pages if they don't exist (with parent_page reference)
         for market in tag_pages:
             category = market.get("series_category_filter", "")
             tag = market.get("series_tag_filter", "")
@@ -801,6 +810,12 @@ class KalshiDataExporter:
             # Generate slug for tag page
             slug = slugify(f"{category}-{tag}")
             name = f"{category} - {tag}"
+            
+            # Skip if already exists
+            if slug in existing_items:
+                slug_to_id[slug] = existing_items[slug]["id"]
+                skipped_count += 1
+                continue
             
             # Look up parent category's Webflow ID
             parent_slug = slugify(category)
@@ -817,11 +832,13 @@ class KalshiDataExporter:
             if parent_id:
                 field_data["parent-page"] = parent_id
             
-            item_id = await self.upsert_webflow_item(collection_id, existing_items, field_data)
+            item_id = await self.create_webflow_item(collection_id, field_data)
             if item_id:
                 slug_to_id[slug] = item_id
+                existing_items[slug] = {"id": item_id, "fieldData": field_data}
+                inserted_count += 1
         
-        logger.info(f"Synced {len(slug_to_id)} market pages to Webflow")
+        logger.info(f"Market pages: Inserted={inserted_count}, Skipped={skipped_count} (already exist)")
         return slug_to_id
     
     async def sync_events_to_webflow(
