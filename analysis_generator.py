@@ -32,8 +32,8 @@ class ResearchQuestions(BaseModel):
 
 class TableDataItem(BaseModel):
     """A single data point for a table."""
-    label: str = Field(description="Name of the metric or data point")
-    value: str = Field(description="Value with source attribution")
+    label: str = Field(description="Short name of the metric (plain text, no markdown or formatting)")
+    value: str = Field(description="Data value with source in parentheses (plain text, no markdown)")
 
 
 class QuestionResearch(BaseModel):
@@ -93,28 +93,48 @@ def clean_markdown_response(text: str) -> str:
     return text
 
 
+def strip_markdown(text: str) -> str:
+    """Strip markdown formatting from text, keeping plain text."""
+    if not text:
+        return ""
+    # Remove bold markers
+    text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    text = re.sub(r'__(.+?)__', r'\1', text)
+    # Remove italic markers
+    text = re.sub(r'\*(.+?)\*', r'\1', text)
+    text = re.sub(r'_(.+?)_', r'\1', text)
+    # Remove code markers
+    text = re.sub(r'`(.+?)`', r'\1', text)
+    return text.strip()
+
+
 def format_table_html(table_data: List[Dict[str, str]]) -> str:
-    """Format table data as an HTML table.
+    """Format table data as an HTML table for Webflow richtext.
+
+    Webflow richtext supports: <table>, <thead>, <tbody>, <tr>, <th>, <td>
     
     Args:
         table_data: List of {label, value} dicts
-        
+
     Returns:
-        HTML table string
+        HTML table string compatible with Webflow richtext
     """
     if not table_data:
         return ""
-    
+
     rows = []
     for item in table_data:
-        label = item.get('label', '')
-        value = item.get('value', '')
+        # Strip any markdown formatting from the data
+        label = strip_markdown(item.get('label', ''))
+        value = strip_markdown(item.get('value', ''))
         if label or value:
-            rows.append(f'<tr><td><strong>{label}</strong></td><td>{value}</td></tr>')
-    
+            # Use <th> for label column (semantically correct, renders bold)
+            rows.append(f'<tr><th>{label}</th><td>{value}</td></tr>')
+
     if not rows:
         return ""
-    
+
+    # Use proper table structure with tbody
     return f'<table><tbody>{"".join(rows)}</tbody></table>'
 
 
@@ -597,9 +617,13 @@ Context: This research is for the prediction market "{event_title}" which resolv
 Search for current, authoritative information to answer this question thoroughly.
 
 Provide:
-- A concise 5-10 word subtitle for this research section
-- Exactly 3 key data points with their sources
-- A 2-3 paragraph analysis with inline citations [Source Name] explaining what the data means for the prediction market outcome"""
+- subtitle: A concise 5-10 word title for this research section (plain text)
+- table_data: Exactly 3 key data points. Each should have:
+  - label: Short metric name (e.g., "Ramp Valuation", "Brex Revenue Target") - plain text only
+  - value: The data with source in parentheses (e.g., "$22.5B (Bloomberg, July 2025)") - plain text only
+- paragraph: A 2-3 paragraph analysis explaining what the data means for the prediction market outcome
+
+IMPORTANT: Do NOT use markdown formatting (no ** or *). Use plain text only."""
 
         result = await self._gemini_generate_structured(
             prompt, QuestionResearch, use_search_grounding=True
