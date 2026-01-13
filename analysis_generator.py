@@ -326,8 +326,9 @@ class AnalysisGenerator:
     ) -> Optional[BaseModel]:
         """Generate structured content using Gemini with JSON schema.
         
-        Uses Gemini's structured output feature to guarantee valid JSON
-        that matches the provided Pydantic schema.
+        Note: Gemini 2.5 does NOT support combining tools (grounding) with 
+        structured JSON output. When grounding is needed, we use a two-step
+        approach: first get grounded info, then format with structured output.
         
         Args:
             prompt: The prompt to send to Gemini
@@ -345,24 +346,55 @@ class AnalysisGenerator:
         try:
             from google.genai import types
             
-            config_kwargs = {
-                "response_mime_type": "application/json",
-                "response_json_schema": response_schema.model_json_schema(),
-            }
-            
             if use_search_grounding:
-                config_kwargs["tools"] = [
-                    types.Tool(google_search=types.GoogleSearch())
-                ]
-            
-            response = client.models.generate_content(
-                model=self.gemini_config.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(**config_kwargs)
-            )
-            
-            # Parse and validate against the schema
-            return response_schema.model_validate_json(response.text)
+                # Two-step approach for grounded + structured output
+                # Step 1: Get grounded information
+                grounded_response = client.models.generate_content(
+                    model=self.gemini_config.model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[types.Tool(google_search=types.GoogleSearch())]
+                    )
+                )
+                grounded_text = grounded_response.text or ""
+                
+                if not grounded_text:
+                    return None
+                
+                # Step 2: Format into structured output
+                schema_json = response_schema.model_json_schema()
+                format_prompt = f"""Based on this research information, extract and format the data.
+
+Research findings:
+{grounded_text}
+
+Format the above information according to this JSON schema:
+{json.dumps(schema_json, indent=2)}
+
+Return ONLY valid JSON matching the schema."""
+
+                structured_response = client.models.generate_content(
+                    model=self.gemini_config.model,
+                    contents=format_prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_json_schema=schema_json,
+                    )
+                )
+                
+                return response_schema.model_validate_json(structured_response.text)
+            else:
+                # Direct structured output without grounding
+                response = client.models.generate_content(
+                    model=self.gemini_config.model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        response_json_schema=response_schema.model_json_schema(),
+                    )
+                )
+                
+                return response_schema.model_validate_json(response.text)
             
         except Exception as e:
             logger.error(f"Error generating structured content with Gemini: {e}")
