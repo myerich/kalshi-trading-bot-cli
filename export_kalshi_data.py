@@ -338,7 +338,7 @@ class KalshiDataExporter:
                 "strike_date": event.get("strike_date", ""),
                 "strike_period": event.get("strike_period", ""),
                 "available_on_brokers": str(event.get("available_on_brokers", False)).lower(),
-                "product_metadata_raw": self.format_product_metadata(event.get("product_metadata")),
+                # Note: product_metadata is NOT available in list endpoint
             })
             
             # C) Denormalized Kalshi Series fields
@@ -358,14 +358,8 @@ class KalshiDataExporter:
                 "additional_prohibitions_raw": "\n".join(additional_prohibitions),
             })
             
-            # D) Kalshi Event metadata (optional endpoint - may not be in response)
-            event_metadata = event.get("metadata") or {}
-            row.update({
-                "event_image_url": event_metadata.get("image_url", "") if isinstance(event_metadata, dict) else "",
-                "featured_image_url": event_metadata.get("featured_image_url", "") if isinstance(event_metadata, dict) else "",
-                "competition": event_metadata.get("competition", "") if isinstance(event_metadata, dict) else "",
-                "competition_scope": event_metadata.get("competition_scope", "") if isinstance(event_metadata, dict) else "",
-            })
+            # Note: Event metadata (image_url, featured_image_url, competition, competition_scope)
+            # is NOT available in the list endpoint - would require individual API calls per event
             
             # E) Octagon Analysis - metadata (all empty)
             row.update({
@@ -463,12 +457,10 @@ class KalshiDataExporter:
             })
             
             # Rules & display
-            market_metadata = market.get("metadata") or {}
+            # Note: Market metadata (image_url, color_code) is NOT available in list endpoint
             row.update({
                 "rules_primary": market.get("rules_primary", ""),
                 "rules_secondary": market.get("rules_secondary", ""),
-                "market_image_url": market_metadata.get("image_url", "") if isinstance(market_metadata, dict) else "",
-                "market_color_code": market_metadata.get("color_code", "") if isinstance(market_metadata, dict) else "",
             })
             
             rows.append(row)
@@ -555,30 +547,28 @@ class KalshiDataExporter:
                 # B) Kalshi Event fields
                 "event_ticker", "series_ticker", "subtitle", "collateral_return_type",
                 "mutually_exclusive", "event_category_deprecated", "strike_date",
-                "strike_period", "available_on_brokers", "product_metadata_raw",
+                "strike_period", "available_on_brokers",
                 # C) Denormalized Kalshi Series fields
                 "series_title", "series_category", "series_tags_raw", "series_frequency",
                 "contract_url", "contract_terms_url", "settlement_sources_raw",
                 "fee_type", "fee_multiplier", "additional_prohibitions_raw",
-                # D) Kalshi Event metadata
-                "event_image_url", "featured_image_url", "competition", "competition_scope",
-                # E) Octagon Analysis - metadata
+                # D) Octagon Analysis - metadata
                 "analysis_last_updated", "analysis_version", "analysis_owner",
-                # F) Octagon Analysis - Section 1 Executive Verdict
+                # E) Octagon Analysis - Section 1 Executive Verdict
                 "confidence_score", "executive_verdict", "model_probability",
                 "market_probability", "edge_pp", "expected_return", "r_score",
                 "executive_summary_richtext",
-                # G) Octagon Analysis - Section 2 Kalshi Contract Snapshot
+                # F) Octagon Analysis - Section 2 Kalshi Contract Snapshot
                 "kalshi_event_url", "contract_snapshot_summary", "market_discussion_summary",
-                # H) Octagon Analysis - Sections 3-8 (5 dynamic questions)
+                # G) Octagon Analysis - Sections 3-8 (5 dynamic questions)
                 "q1_subtitle", "q1_table_richtext", "q1_paragraph_richtext",
                 "q2_subtitle", "q2_table_richtext", "q2_paragraph_richtext",
                 "q3_subtitle", "q3_table_richtext", "q3_paragraph_richtext",
                 "q4_subtitle", "q4_table_richtext", "q4_paragraph_richtext",
                 "q5_subtitle", "q5_table_richtext", "q5_paragraph_richtext",
-                # I) Octagon Analysis - Section 9
+                # H) Octagon Analysis - Section 9
                 "what_could_change_subtitle", "what_could_change_paragraph_richtext",
-                # J) Octagon Analysis - Section 10
+                # I) Octagon Analysis - Section 10
                 "transparency_subtitle", "transparency_paragraph_richtext",
             ]
             
@@ -595,7 +585,7 @@ class KalshiDataExporter:
                 "last_price_dollars", "volume", "volume_24h", "open_interest",
                 "liquidity_dollars",
                 # Rules & display
-                "rules_primary", "rules_secondary", "market_image_url", "market_color_code",
+                "rules_primary", "rules_secondary",
             ]
             
             # Write CSV files
