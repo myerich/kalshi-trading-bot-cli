@@ -16,6 +16,74 @@ from config import GeminiConfig, ExaConfig, OctagonConfig
 from research_client import OctagonClient
 
 
+def parse_json_safely(text: str) -> Optional[Dict[str, Any]]:
+    """Parse JSON from text, handling common issues with LLM output.
+    
+    Args:
+        text: Text that may contain JSON
+        
+    Returns:
+        Parsed dict or None if parsing fails
+    """
+    if not text:
+        return None
+    
+    # Try direct parse first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    
+    # Try to find JSON object in the text
+    # Look for outermost { } pair
+    start = text.find('{')
+    if start == -1:
+        return None
+    
+    # Find matching closing brace by counting braces
+    depth = 0
+    end = -1
+    for i, char in enumerate(text[start:], start):
+        if char == '{':
+            depth += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    
+    if end == -1:
+        return None
+    
+    json_str = text[start:end]
+    
+    # Try parsing the extracted JSON
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        pass
+    
+    # Try fixing common issues
+    # Remove trailing commas before } or ]
+    fixed = re.sub(r',\s*([\}\]])', r'\1', json_str)
+    
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+    
+    # Try replacing single quotes with double quotes (careful with apostrophes)
+    # Only do this if there are no double quotes in values
+    if '"' not in json_str:
+        fixed = json_str.replace("'", '"')
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+    
+    return None
+
+
 class AnalysisGenerator:
     """Generates AI-powered analysis for Kalshi events."""
     
@@ -259,30 +327,19 @@ Format your response as JSON only, no other text:
 
         response = await self._gemini_generate(prompt, use_search_grounding=True)
         
-        # Parse JSON from response
-        try:
-            # Try to extract JSON from the response
-            json_match = re.search(r'\{[^{}]*\}', response, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
-            else:
-                logger.warning(f"Could not parse JSON from question generation response: {response[:200]}")
-                return {
-                    "q1": f"Will {event_title}?",
-                    "q2": f"What is the latest news about {event_title}?",
-                    "q3": f"What do experts predict about {event_title}?",
-                    "q4": f"What data supports predictions about {event_title}?",
-                    "q5": f"When will {event_title} be decided?"
-                }
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse question generation JSON: {e}")
-            return {
-                "q1": f"Will {event_title}?",
-                "q2": f"What is the latest news about {event_title}?",
-                "q3": f"What do experts predict about {event_title}?",
-                "q4": f"What data supports predictions about {event_title}?",
-                "q5": f"When will {event_title} be decided?"
-            }
+        # Parse JSON from response using robust parser
+        parsed = parse_json_safely(response)
+        if parsed and all(f"q{i}" in parsed for i in range(1, 6)):
+            return parsed
+        
+        logger.warning(f"Could not parse JSON from question generation response: {response[:200]}")
+        return {
+            "q1": f"Will {event_title}?",
+            "q2": f"What is the latest news about {event_title}?",
+            "q3": f"What do experts predict about {event_title}?",
+            "q4": f"What data supports predictions about {event_title}?",
+            "q5": f"When will {event_title} be decided?"
+        }
     
     async def research_question(
         self,
@@ -311,25 +368,22 @@ Provide your response in this exact JSON format only, no other text:
 
         response = await self._gemini_generate(prompt, use_search_grounding=True)
         
-        # Parse JSON from response
-        try:
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
-            else:
-                logger.warning(f"Could not parse JSON from research response: {response[:200]}")
-                return {
-                    "subtitle": question[:50],
-                    "table_data": [],
-                    "paragraph": response[:1000] if response else "Research data not available."
-                }
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse research JSON: {e}")
+        # Parse JSON from response using robust parser
+        parsed = parse_json_safely(response)
+        if parsed and "subtitle" in parsed:
+            # Ensure required keys exist
             return {
-                "subtitle": question[:50],
-                "table_data": [],
-                "paragraph": response[:1000] if response else "Research data not available."
+                "subtitle": parsed.get("subtitle", question[:50]),
+                "table_data": parsed.get("table_data", []),
+                "paragraph": parsed.get("paragraph", "")
             }
+        
+        logger.warning(f"Could not parse JSON from research response, using raw text")
+        return {
+            "subtitle": question[:50],
+            "table_data": [],
+            "paragraph": response[:2000] if response else "Research data not available."
+        }
     
     async def research_what_could_change(
         self,
@@ -358,20 +412,18 @@ Provide your response in this exact JSON format only, no other text:
 
         response = await self._gemini_generate(prompt, use_search_grounding=True)
         
-        try:
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
-            else:
-                return {
-                    "subtitle": "Key Catalysts",
-                    "paragraph": response[:2000] if response else "Catalyst analysis not available."
-                }
-        except json.JSONDecodeError:
+        # Parse JSON from response using robust parser
+        parsed = parse_json_safely(response)
+        if parsed and "paragraph" in parsed:
             return {
-                "subtitle": "Key Catalysts",
-                "paragraph": response[:2000] if response else "Catalyst analysis not available."
+                "subtitle": parsed.get("subtitle", "Key Catalysts"),
+                "paragraph": parsed.get("paragraph", "")
             }
+        
+        return {
+            "subtitle": "Key Catalysts",
+            "paragraph": response[:2000] if response else "Catalyst analysis not available."
+        }
     
     def generate_transparency_section(self) -> Dict[str, str]:
         """Generate the transparency/methodology section (static template).

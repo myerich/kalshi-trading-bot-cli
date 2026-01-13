@@ -593,6 +593,44 @@ class KalshiDataExporter:
             logger.error(f"Failed to initialize analysis generator: {e}")
             return False
     
+    # Fields that exist in the Webflow Events collection schema
+    # Fields NOT in this set will be filtered out before sending to Webflow
+    WEBFLOW_VALID_FIELDS = {
+        # Core fields
+        "name", "slug", "event-ticker", "series-ticker", "subtitle",
+        "series-category", "strike-date", "strike-period", "market-page",
+        # Analysis fields that exist in schema
+        "analysis-last-updated",
+        "confidence-score", "model-probability", "market-probability",
+        "edge-pp", "expected-return", "r-score",
+        "executive-summary-richtext",
+        "kalshi-event-url", "contract-snapshot-summary", "market-discussion-summary",
+        "q1-subtitle", "q1-table-richtext", "q1-paragraph-richtext",
+        "q2-subtitle", "q2-table-richtext", "q2-paragraph-richtext",
+        "q3-subtitle", "q3-table-richtext", "q3-paragraph-richtext",
+        "q4-subtitle", "q4-table-richtext", "q4-paragraph-richtext",
+        "q5-subtitle", "q5-table-richtext", "q5-paragraph-richtext",
+        "what-could-change-subtitle", "what-could-change-paragraph-richtext",
+        "transparency-subtitle", "transparency-paragraph-richtext",
+    }
+    
+    def _filter_webflow_fields(self, field_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Filter field_data to only include valid Webflow fields.
+        
+        Args:
+            field_data: Dict of field names to values
+            
+        Returns:
+            Filtered dict with only valid Webflow fields
+        """
+        filtered = {}
+        for key, value in field_data.items():
+            if key in self.WEBFLOW_VALID_FIELDS:
+                filtered[key] = value
+            else:
+                logger.debug(f"Skipping invalid Webflow field: {key}")
+        return filtered
+    
     def _needs_analysis(self, webflow_item: Optional[Dict[str, Any]]) -> bool:
         """Check if Webflow item is missing analysis fields.
         
@@ -607,7 +645,6 @@ class KalshiDataExporter:
         
         # Required fields that indicate analysis was run
         analysis_fields = [
-            'key-takeaway',
             'executive-summary-richtext',
             'model-probability',
             'q1-subtitle',
@@ -942,7 +979,9 @@ class KalshiDataExporter:
                     except Exception as e:
                         logger.error(f"Analysis generation failed for {event_ticker}: {e}")
                 
-                item_id = await self.create_webflow_item(collection_id, field_data)
+                # Filter to only valid Webflow fields
+                filtered_field_data = self._filter_webflow_fields(field_data)
+                item_id = await self.create_webflow_item(collection_id, filtered_field_data)
                 if item_id:
                     inserted_count += 1
                     existing_items[slug] = {"id": item_id, "fieldData": field_data}
@@ -967,9 +1006,10 @@ class KalshiDataExporter:
                             field_data[webflow_key] = value
                         analysis_count += 1
                         
-                        # Update the item with analysis
+                        # Filter to only valid Webflow fields and update
+                        filtered_field_data = self._filter_webflow_fields(field_data)
                         item_id = existing["id"]
-                        success = await self.update_webflow_item(collection_id, item_id, field_data)
+                        success = await self.update_webflow_item(collection_id, item_id, filtered_field_data)
                         if success:
                             updated_count += 1
                     except Exception as e:
