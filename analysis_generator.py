@@ -351,8 +351,30 @@ class AnalysisGenerator:
             logger.error(f"Error generating content with Gemini: {e}")
             return ""
     
-    def _extract_grounding_sources(self, response) -> List[Dict[str, str]]:
+    async def _resolve_redirect_url(self, redirect_url: str) -> str:
+        """Resolve a Vertex AI Search redirect URL to its actual destination.
+        
+        Args:
+            redirect_url: The vertexaisearch.cloud.google.com redirect URL
+            
+        Returns:
+            The actual destination URL, or the original if resolution fails
+        """
+        if not redirect_url or "vertexaisearch.cloud.google.com" not in redirect_url:
+            return redirect_url
+        
+        try:
+            import httpx
+            async with httpx.AsyncClient(follow_redirects=True, timeout=5.0) as client:
+                response = await client.head(redirect_url)
+                return str(response.url)
+        except Exception:
+            return redirect_url  # Fallback to original if resolving fails
+    
+    async def _extract_grounding_sources(self, response) -> List[Dict[str, str]]:
         """Extract grounding sources from Gemini response metadata.
+        
+        Resolves Vertex AI Search redirect URLs to actual source URLs.
         
         Args:
             response: Gemini API response object
@@ -371,12 +393,25 @@ class AnalysisGenerator:
                     metadata = candidate.grounding_metadata
                     
                     if hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks:
+                        # Collect redirect URLs to resolve in parallel
+                        redirect_tasks = []
+                        chunk_data = []
+                        
                         for chunk in metadata.grounding_chunks:
                             if hasattr(chunk, 'web') and chunk.web:
-                                sources.append({
-                                    "title": chunk.web.title or "",
-                                    "uri": chunk.web.uri or ""
-                                })
+                                title = chunk.web.title or ""
+                                uri = chunk.web.uri or ""
+                                chunk_data.append({"title": title})
+                                redirect_tasks.append(self._resolve_redirect_url(uri))
+                        
+                        # Resolve all redirect URLs in parallel
+                        if redirect_tasks:
+                            resolved_urls = await asyncio.gather(*redirect_tasks, return_exceptions=True)
+                            for i, url in enumerate(resolved_urls):
+                                if isinstance(url, Exception):
+                                    url = ""
+                                chunk_data[i]["uri"] = url
+                            sources = chunk_data
                 
         except Exception as e:
             logger.warning(f"Failed to extract grounding sources: {e}")
@@ -423,8 +458,8 @@ class AnalysisGenerator:
                 )
                 grounded_text = grounded_response.text or ""
                 
-                # Extract real grounding sources from the response
-                grounding_sources = self._extract_grounding_sources(grounded_response)
+                # Extract real grounding sources from the response (resolves redirect URLs)
+                grounding_sources = await self._extract_grounding_sources(grounded_response)
                 logger.info(f"Extracted {len(grounding_sources)} grounding sources from search")
                 
                 if not grounded_text:
