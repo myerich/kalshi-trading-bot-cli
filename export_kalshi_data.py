@@ -1275,7 +1275,7 @@ class KalshiDataExporter:
                 # I) Octagon Analysis - Section 10
                 "transparency_subtitle", "transparency_paragraph_richtext",
                 # J) Chart Analysis
-                "chart_analysis_richtext", "candlestick_data_json",
+                "chart_analysis_richtext", "candlestick_data_json", "chart_anomalies_json",
             ]
             
             contracts_fields = [

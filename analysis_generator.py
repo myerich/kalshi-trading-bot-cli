@@ -49,6 +49,17 @@ class CatalystResearch(BaseModel):
     paragraphs: List[str] = Field(description="2-3 paragraphs with inline citations like [1], [2]")
 
 
+class ChartAnomaly(BaseModel):
+    """A significant price movement detected in the chart."""
+    date: str = Field(description="Date of the anomaly (ISO format)")
+    date_readable: str = Field(description="Human-readable date (e.g., 'January 5, 2026')")
+    price_before: float = Field(description="Price before the movement (0-1 probability)")
+    price_after: float = Field(description="Price after the movement (0-1 probability)")
+    change_pct: float = Field(description="Percentage point change")
+    direction: str = Field(description="'spike' or 'drop'")
+    description: str = Field(description="Brief description of the movement")
+
+
 def clean_markdown_response(text: str) -> str:
     """Clean markdown artifacts from LLM responses.
     
@@ -618,7 +629,8 @@ Summarize in 2-3 sentences the main viewpoints and arguments."""
         event_subtitle: str,
         series_category: str,
         market_probability: float,
-        candlesticks: Optional[List[Dict[str, Any]]] = None
+        candlesticks: Optional[List[Dict[str, Any]]] = None,
+        anomalies: Optional[List[ChartAnomaly]] = None
     ) -> Dict[str, str]:
         """Generate 5 timely, mutually exclusive research questions.
 
@@ -631,6 +643,7 @@ Summarize in 2-3 sentences the main viewpoints and arguments."""
             series_category: Category of the series
             market_probability: Current market probability (0-100)
             candlesticks: Optional list of candlestick data for price context
+            anomalies: Optional list of detected chart anomalies
 
         Returns:
             Dict with keys q1-q5 containing the research questions,
@@ -661,7 +674,7 @@ Be specific about dates, names, and current events."""
                     if isinstance(price, dict):
                         price = price.get("close", 0)
                     prices.append(float(price) if price else 0)
-            
+
             if prices:
                 min_price = min(prices) / 100 if max(prices) > 1 else min(prices)
                 max_price = max(prices) / 100 if max(prices) > 1 else max(prices)
@@ -669,13 +682,20 @@ Be specific about dates, names, and current events."""
                 first_price = prices[0] / 100 if prices[0] > 1 else prices[0]
                 price_change = latest_price - first_price
                 trend = "upward" if price_change > 0.05 else "downward" if price_change < -0.05 else "sideways"
-                
+
                 chart_context = f"""
 Price Chart Analysis:
 - Price range: {min_price*100:.1f}% to {max_price*100:.1f}% YES probability
 - Starting price: {first_price*100:.1f}% → Current price: {latest_price*100:.1f}%
 - Overall trend: {trend} ({price_change*100:+.1f} percentage points)
 - Data points: {len(candlesticks)} periods"""
+
+        # Add anomalies to chart context
+        if anomalies:
+            anomaly_lines = ["", "Significant Price Movements Detected:"]
+            for a in anomalies:
+                anomaly_lines.append(f"- {a.date_readable}: {abs(a.change_pct):.1f}pp {a.direction} ({a.price_before*100:.1f}% → {a.price_after*100:.1f}%)")
+            chart_context += "\n".join(anomaly_lines)
 
         # Step 2: Use Gemini to generate 5 mutually exclusive questions based on the context
         prompt = f"""You are generating 5 research questions for a prediction market analysis page.
@@ -991,7 +1011,9 @@ IMPORTANT: Do NOT use markdown formatting (no ** or *). Use plain text only."""
         event_title: str,
         event_subtitle: str,
         market_ticker: str,
-        current_state_summary: str = ""
+        current_state_summary: str = "",
+        anomalies: Optional[List[ChartAnomaly]] = None,
+        anomaly_research: Optional[Dict[str, str]] = None
     ) -> str:
         """Interpret candlestick chart data using Gemini Pro.
 
@@ -1001,6 +1023,8 @@ IMPORTANT: Do NOT use markdown formatting (no ** or *). Use plain text only."""
             event_subtitle: Subtitle explaining the resolution criteria
             market_ticker: Market ticker for context
             current_state_summary: Current state of affairs from Octagon research
+            anomalies: Optional list of detected price anomalies
+            anomaly_research: Optional dict mapping anomaly dates to research findings
 
         Returns:
             HTML paragraph with chart interpretation
@@ -1052,7 +1076,21 @@ IMPORTANT: Do NOT use markdown formatting (no ** or *). Use plain text only."""
         
         # Truncate current state summary for prompt
         context_snippet = current_state_summary[:1500] if current_state_summary else "No additional context available."
-        
+
+        # Build anomaly section with research findings
+        anomaly_section = ""
+        if anomalies and len(anomalies) > 0:
+            anomaly_lines = ["Significant Price Movements Detected:"]
+            for a in anomalies:
+                research = ""
+                if anomaly_research and a.date in anomaly_research:
+                    # Truncate research to first 300 chars
+                    research_text = anomaly_research[a.date][:300] if anomaly_research[a.date] else ""
+                    if research_text:
+                        research = f"\n   Context: {research_text}..."
+                anomaly_lines.append(f"- {a.date_readable}: {abs(a.change_pct):.1f}pp {a.direction} ({a.price_before*100:.1f}% → {a.price_after*100:.1f}%){research}")
+            anomaly_section = "\n".join(anomaly_lines) + "\n"
+
         prompt = f"""You are a financial analyst interpreting a prediction market price chart.
 
 Market: "{event_title}" ({market_ticker})
@@ -1061,6 +1099,7 @@ Resolution: {event_subtitle}
 Current Context (recent news and developments):
 {context_snippet}
 
+{anomaly_section}
 Chart Summary:
 - Total data points: {total_candles}
 - Price range: ${min_price:.2f} to ${max_price:.2f} (YES probability as decimal)
@@ -1074,7 +1113,7 @@ Sample data points (early, middle, recent):
 
 Write a 2-3 paragraph technical analysis of this prediction market's price action:
 1. Describe the overall price trend and any significant movements
-2. Connect price movements to the current context/news when relevant
+2. IMPORTANT: Explain what caused any significant price spikes or drops using the provided context
 3. Note volume patterns and what they suggest about market conviction
 4. Identify any support/resistance levels or key price points
 5. Provide insight into what the chart suggests about market sentiment
@@ -1088,6 +1127,129 @@ IMPORTANT: Do NOT use markdown formatting. Use plain text only."""
             return clean_markdown_response(analysis)
         
         return f"<p>The market has traded between {min_price*100:.1f}% and {max_price*100:.1f}% YES probability, with a current reading of {latest_price*100:.1f}%. Total volume: {total_volume:,} contracts.</p>"
+
+    def detect_chart_anomalies(
+        self,
+        candlesticks: List[Dict[str, Any]],
+        threshold_pct: float = 10.0
+    ) -> List[ChartAnomaly]:
+        """Detect significant price movements (anomalies) from candlestick data.
+        
+        Args:
+            candlesticks: List of candlestick data points from Kalshi API
+            threshold_pct: Minimum percentage point change to flag as anomaly
+            
+        Returns:
+            List of ChartAnomaly objects sorted by magnitude (largest first)
+        """
+        if not candlesticks or len(candlesticks) < 2:
+            return []
+        
+        anomalies = []
+        
+        # Extract prices and timestamps
+        data_points = []
+        for candle in candlesticks:
+            price = candle.get("price")
+            if price is not None:
+                if isinstance(price, dict):
+                    price = price.get("close", 0)
+                price = float(price) if price else 0
+                # Normalize to 0-1 range
+                if price > 1:
+                    price = price / 100
+                
+                ts = candle.get("end_period_ts", 0)
+                data_points.append({"price": price, "ts": ts})
+        
+        if len(data_points) < 2:
+            return []
+        
+        # Detect period-over-period anomalies
+        for i in range(1, len(data_points)):
+            prev = data_points[i - 1]
+            curr = data_points[i]
+            
+            change_pct = (curr["price"] - prev["price"]) * 100  # Percentage points
+            
+            if abs(change_pct) >= threshold_pct:
+                # Convert timestamp to readable date
+                try:
+                    dt = datetime.fromtimestamp(curr["ts"])
+                    date_iso = dt.strftime("%Y-%m-%d")
+                    date_readable = dt.strftime("%B %d, %Y")
+                except (ValueError, OSError):
+                    date_iso = "unknown"
+                    date_readable = "unknown date"
+                
+                direction = "spike" if change_pct > 0 else "drop"
+                
+                anomaly = ChartAnomaly(
+                    date=date_iso,
+                    date_readable=date_readable,
+                    price_before=prev["price"],
+                    price_after=curr["price"],
+                    change_pct=round(change_pct, 1),
+                    direction=direction,
+                    description=f"{abs(change_pct):.1f}pp {direction} on {date_readable} ({prev['price']*100:.1f}% → {curr['price']*100:.1f}%)"
+                )
+                anomalies.append(anomaly)
+        
+        # Sort by magnitude (largest first) and limit to top 5
+        anomalies.sort(key=lambda x: abs(x.change_pct), reverse=True)
+        return anomalies[:5]
+
+    async def research_anomalies(
+        self,
+        anomalies: List[ChartAnomaly],
+        event_title: str
+    ) -> Dict[str, str]:
+        """Research what caused each anomaly using Octagon.
+        
+        Args:
+            anomalies: List of detected anomalies
+            event_title: Title of the event for context
+            
+        Returns:
+            Dict mapping anomaly date to research findings
+        """
+        if not anomalies:
+            return {}
+        
+        octagon = self._init_octagon()
+        research_results = {}
+        
+        async def research_single_anomaly(anomaly: ChartAnomaly) -> tuple:
+            question = f"""What news, events, or developments related to "{event_title}" occurred on or around {anomaly.date_readable}?
+
+This prediction market saw a significant {anomaly.direction} of {abs(anomaly.change_pct):.1f} percentage points on this date.
+
+Identify:
+1. Any news announcements or press releases
+2. Official statements or decisions
+3. Data releases or reports
+4. Expert commentary or forecasts
+5. Any other events that could explain this price movement
+
+Be specific about what happened and cite sources."""
+
+            try:
+                result = await octagon.research_question(question, "")
+                return (anomaly.date, result)
+            except Exception as e:
+                logger.error(f"Error researching anomaly on {anomaly.date}: {e}")
+                return (anomaly.date, f"Unable to research: {str(e)}")
+        
+        # Research all anomalies in parallel
+        tasks = [research_single_anomaly(a) for a in anomalies]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for result in results:
+            if isinstance(result, tuple):
+                date, findings = result
+                research_results[date] = findings
+        
+        return research_results
     
     async def run_octagon_research(
         self,
@@ -1429,18 +1591,31 @@ Use clear, professional language. Be specific with data points. Format for reada
             "market_probability": f"{market_probability:.1f}",
         }
         
+        # Detect chart anomalies before Phase 1
+        anomalies = []
+        if candlesticks:
+            logger.info(f"Detecting chart anomalies for {event_ticker}")
+            anomalies = self.detect_chart_anomalies(candlesticks, threshold_pct=8.0)
+            if anomalies:
+                logger.info(f"Found {len(anomalies)} significant price movements")
+                for a in anomalies:
+                    logger.info(f"  - {a.description}")
+        
         # Phase 1: Parallel API calls
         logger.info(f"Phase 1: Running parallel API calls for {event_ticker}")
         
-        # Run Exa crawl, Octagon research, and question generation in parallel
+        # Run Exa crawl, Octagon research, question generation, and anomaly research in parallel
         exa_task = self.crawl_kalshi_page(series_ticker, series_title, event_ticker)
         octagon_task = self.run_octagon_research(event, markets)
         questions_task = self.generate_research_questions(
-            event_title, event_subtitle, series_category, market_probability, candlesticks
+            event_title, event_subtitle, series_category, market_probability, candlesticks, anomalies
         )
-        
-        exa_result, octagon_result, questions = await asyncio.gather(
-            exa_task, octagon_task, questions_task,
+        async def empty_dict():
+            return {}
+        anomaly_task = self.research_anomalies(anomalies, event_title) if anomalies else empty_dict()
+
+        exa_result, octagon_result, questions, anomaly_research = await asyncio.gather(
+            exa_task, octagon_task, questions_task, anomaly_task,
             return_exceptions=True
         )
         
@@ -1454,9 +1629,31 @@ Use clear, professional language. Be specific with data points. Format for reada
         if isinstance(questions, Exception):
             logger.error(f"Question generation failed: {questions}")
             questions = {"q1": "", "q2": "", "q3": "", "q4": "", "q5": "", "current_state_summary": ""}
+        if isinstance(anomaly_research, Exception):
+            logger.error(f"Anomaly research failed: {anomaly_research}")
+            anomaly_research = {}
         
         # Add current state summary to analysis
         analysis["current_state_summary_richtext"] = questions.get("current_state_summary", "")
+        
+        # Add anomaly data to analysis
+        if anomalies:
+            anomaly_list = []
+            for a in anomalies:
+                anomaly_entry = {
+                    "date": a.date,
+                    "date_readable": a.date_readable,
+                    "change_pct": a.change_pct,
+                    "direction": a.direction,
+                    "price_before": round(a.price_before * 100, 1),
+                    "price_after": round(a.price_after * 100, 1),
+                    "description": a.description,
+                    "research": anomaly_research.get(a.date, "")
+                }
+                anomaly_list.append(anomaly_entry)
+            analysis["chart_anomalies_json"] = json.dumps(anomaly_list)
+        else:
+            analysis["chart_anomalies_json"] = "[]"
         
         # Extract Octagon results
         octagon_text = octagon_result.get("full_text", "")
@@ -1561,7 +1758,8 @@ Use clear, professional language. Be specific with data points. Format for reada
             market_ticker = markets[0].get("ticker", "") if markets else ""
             current_state = analysis.get("current_state_summary_richtext", "")
             chart_analysis = await self.interpret_candlestick_chart(
-                candlesticks, event_title, event_subtitle, market_ticker, current_state
+                candlesticks, event_title, event_subtitle, market_ticker, current_state,
+                anomalies, anomaly_research
             )
             analysis["chart_analysis_richtext"] = chart_analysis
             analysis["candlestick_data_json"] = json.dumps(candlesticks)
