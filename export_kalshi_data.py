@@ -1256,6 +1256,8 @@ class KalshiDataExporter:
                 "fee_type", "fee_multiplier", "additional_prohibitions_raw",
                 # D) Octagon Analysis - metadata
                 "analysis_last_updated", "analysis_version", "analysis_owner",
+                # D2) Current State Summary (from Octagon research)
+                "current_state_summary_richtext",
                 # E) Octagon Analysis - Section 1 Executive Summary
                 "confidence_score", "key_takeaway", "model_probability",
                 "market_probability", "edge_pp", "expected_return", "r_score",

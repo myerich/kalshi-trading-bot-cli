@@ -631,7 +631,8 @@ Summarize in 2-3 sentences the main viewpoints and arguments."""
             market_probability: Current market probability (0-100)
             
         Returns:
-            Dict with keys q1-q5 containing the research questions
+            Dict with keys q1-q5 containing the research questions,
+            plus 'current_state_summary' with the Octagon research context
         """
         # Step 1: Use Octagon to get current context on this topic
         octagon = self._init_octagon()
@@ -678,6 +679,9 @@ IMPORTANT: Questions must NOT overlap. Each should be independently researchable
             prompt, ResearchQuestions, use_search_grounding=False
         )
         
+        # Format the current state summary as HTML
+        formatted_context = clean_markdown_response(current_context) if current_context else ""
+        
         if result:
             return {
                 "q1": result.q1,
@@ -685,6 +689,7 @@ IMPORTANT: Questions must NOT overlap. Each should be independently researchable
                 "q3": result.q3,
                 "q4": result.q4,
                 "q5": result.q5,
+                "current_state_summary": formatted_context,
             }
         
         # Fallback if structured output fails
@@ -694,7 +699,8 @@ IMPORTANT: Questions must NOT overlap. Each should be independently researchable
             "q2": f"What is the latest news about {event_title}?",
             "q3": f"What do experts predict about {event_title}?",
             "q4": f"What data supports predictions about {event_title}?",
-            "q5": f"When will {event_title} be decided?"
+            "q5": f"When will {event_title} be decided?",
+            "current_state_summary": formatted_context,
         }
     
     def _format_paragraphs_as_html(self, paragraphs: List[str]) -> str:
@@ -1406,7 +1412,10 @@ Use clear, professional language. Be specific with data points. Format for reada
             octagon_result = {"full_text": "", "probabilities": {}, "confidence": 5}
         if isinstance(questions, Exception):
             logger.error(f"Question generation failed: {questions}")
-            questions = {"q1": "", "q2": "", "q3": "", "q4": "", "q5": ""}
+            questions = {"q1": "", "q2": "", "q3": "", "q4": "", "q5": "", "current_state_summary": ""}
+        
+        # Add current state summary to analysis
+        analysis["current_state_summary_richtext"] = questions.get("current_state_summary", "")
         
         # Extract Octagon results
         octagon_text = octagon_result.get("full_text", "")
