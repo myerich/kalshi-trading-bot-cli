@@ -1450,10 +1450,12 @@ Be specific about what happened and cite sources."""
         octagon_text: str,
         q_summaries: List[str],
         model_probability: float,
-        market_probability: float
+        market_probability: float,
+        anomalies: Optional[List[ChartAnomaly]] = None,
+        close_time: str = ""
     ) -> str:
         """Generate a one-line key takeaway from all research.
-        
+
         Args:
             event_title: Title of the event
             event_subtitle: Subtitle of the event
@@ -1461,12 +1463,25 @@ Be specific about what happened and cite sources."""
             q_summaries: List of paragraph summaries from Q1-Q5
             model_probability: Model's probability prediction
             market_probability: Current market probability
-            
+            anomalies: Optional list of chart anomalies
+            close_time: Market close/settlement time
+
         Returns:
             One-line key takeaway (max 15 words)
         """
         q_text = "\n".join([f"Q{i+1}: {s[:200]}" for i, s in enumerate(q_summaries) if s])
         
+        # Format anomalies for context
+        anomaly_text = ""
+        if anomalies:
+            anomaly_lines = [f"- {a.description}" for a in anomalies[:3]]
+            anomaly_text = f"\n## Recent Price Movements:\n" + "\n".join(anomaly_lines)
+        
+        # Format close time
+        close_info = ""
+        if close_time:
+            close_info = f"\n- Market closes: {close_time}"
+
         prompt = f"""You are a research analyst summarizing findings for a prediction market.
 
 ## Market: "{event_title}"
@@ -1477,10 +1492,11 @@ Be specific about what happened and cite sources."""
 
 ## Grounded Research Findings:
 {q_text}
+{anomaly_text}
 
 ## Market Data:
 - Model probability (Octagon): {model_probability:.1f}%
-- Current market probability: {market_probability:.1f}%
+- Current market probability: {market_probability:.1f}%{close_info}
 
 Based on ALL the research above, write a single sentence (max 15 words) that captures the most important finding or insight.
 
@@ -1511,7 +1527,9 @@ Respond with ONLY the one-line takeaway, nothing else."""
         q_findings: List[Dict[str, str]],
         what_could_change: str,
         model_probability: float,
-        market_probability: float
+        market_probability: float,
+        anomalies: Optional[List[ChartAnomaly]] = None,
+        close_time: str = ""
     ) -> str:
         """Generate 2-3 paragraph executive summary from all research.
         
@@ -1524,6 +1542,8 @@ Respond with ONLY the one-line takeaway, nothing else."""
             what_could_change: Summary of key catalysts
             model_probability: Model's probability prediction
             market_probability: Current market probability
+            anomalies: Optional list of chart anomalies
+            close_time: Market close/settlement time
             
         Returns:
             2-3 paragraph executive summary
@@ -1532,6 +1552,17 @@ Respond with ONLY the one-line takeaway, nothing else."""
             f"{i+1}. {f.get('subtitle', '')}: {f.get('paragraph', '')[:150]}..."
             for i, f in enumerate(q_findings) if f
         ])
+        
+        # Format anomalies for context
+        anomaly_text = ""
+        if anomalies:
+            anomaly_lines = [f"- {a.description}" for a in anomalies[:3]]
+            anomaly_text = "\n\n## Recent Price Movements:\n" + "\n".join(anomaly_lines)
+        
+        # Format close time
+        close_info = ""
+        if close_time:
+            close_info = f"\n- Market closes: {close_time}"
         
         prompt = f"""You are writing a research summary for a prediction market analysis page.
 
@@ -1547,10 +1578,11 @@ Category: {series_category}
 
 ## Key Catalysts:
 {what_could_change[:1000]}
+{anomaly_text}
 
 ## Market Data:
 - Model probability (Octagon): {model_probability:.1f}%
-- Current market probability: {market_probability:.1f}%
+- Current market probability: {market_probability:.1f}%{close_info}
 
 Write a 2-3 paragraph research summary that:
 
@@ -1562,7 +1594,7 @@ Write a 2-3 paragraph research summary that:
 **Paragraph 2: Key Findings**
 - Synthesize the most important findings from the research
 - Highlight relevant data points and evidence
-- Note any conflicting information or uncertainty
+- If there were significant price movements, explain what caused them
 
 **Paragraph 3: Factors to Watch**
 - Identify the key factors that could influence the outcome
@@ -1666,6 +1698,16 @@ Use clear, professional language. Be specific with data points. Format for reada
         event_slug = event_ticker.lower() if event_ticker else ""
         kalshi_url = f"https://kalshi.com/markets/{series_slug}/{title_slug}/{event_slug}"
         
+        # Calculate aggregate market stats
+        total_volume = 0
+        total_volume_24h = 0
+        total_open_interest = 0
+        if markets:
+            for m in markets:
+                total_volume += int(m.get("volume", 0) or 0)
+                total_volume_24h += int(m.get("volume_24h", 0) or 0)
+                total_open_interest += int(m.get("open_interest", 0) or 0)
+        
         # Initialize analysis result with metadata
         analysis = {
             "analysis_last_updated": datetime.now().isoformat(),
@@ -1673,6 +1715,10 @@ Use clear, professional language. Be specific with data points. Format for reada
             "analysis_owner": "AI-Generated",
             "kalshi_event_url": kalshi_url,
             "market_probability": f"{market_probability:.1f}",
+            "total_volume": str(total_volume),
+            "total_volume_24h": str(total_volume_24h),
+            "total_open_interest": str(total_open_interest),
+            "close_time": close_time,
         }
         
         # Detect chart anomalies before Phase 1
@@ -1826,14 +1872,16 @@ Use clear, professional language. Be specific with data points. Format for reada
         
         key_takeaway = await self.generate_key_takeaway(
             event_title, event_subtitle, octagon_text,
-            q_paragraphs, model_probability, market_probability
+            q_paragraphs, model_probability, market_probability,
+            anomalies, close_time
         )
         
         executive_summary = await self.generate_executive_summary(
             event_title, event_subtitle, series_category,
             octagon_text, q_findings,
             what_could_change.get("paragraph", ""),
-            model_probability, market_probability
+            model_probability, market_probability,
+            anomalies, close_time
         )
         
         # Phase 6: Chart interpretation (if candlestick data provided)
@@ -1864,7 +1912,7 @@ Use clear, professional language. Be specific with data points. Format for reada
         analysis["edge_pp"] = f"{edge:.1f}"
         analysis["expected_return"] = f"{expected_return:.1f}"
         analysis["r_score"] = f"{r_score:.2f}"
-        analysis["executive_verdict"] = clean_markdown_response(key_takeaway)  # One-line summary/verdict
+        analysis["key_takeaway"] = clean_markdown_response(key_takeaway)  # One-line summary/verdict
         analysis["executive_summary_richtext"] = clean_markdown_response(executive_summary)
         
         logger.info(f"Completed analysis for {event_ticker}")

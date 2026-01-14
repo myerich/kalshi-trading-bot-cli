@@ -1263,6 +1263,7 @@ class KalshiDataExporter:
                 # E) Octagon Analysis - Section 1 Executive Summary
                 "confidence_score", "key_takeaway", "model_probability",
                 "market_probability", "edge_pp", "expected_return", "r_score",
+                "total_volume", "total_volume_24h", "total_open_interest", "close_time",
                 "executive_summary_richtext",
                 # F) Octagon Analysis - Section 2 Kalshi Contract Snapshot
                 "kalshi_event_url", "contract_snapshot_summary", "market_discussion_summary",
