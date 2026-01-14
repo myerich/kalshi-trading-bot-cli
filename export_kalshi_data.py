@@ -884,7 +884,7 @@ class KalshiDataExporter:
         events_rows: List[Dict[str, Any]], 
         market_id_map: Dict[str, str],
         markets_by_event: Optional[Dict[str, List[Dict[str, Any]]]] = None
-    ) -> int:
+    ) -> tuple[int, List[Dict[str, Any]]]:
         """Sync events to Webflow CMS with market_page references.
         
         Each event is linked to a market page based on its series_category.
@@ -900,7 +900,8 @@ class KalshiDataExporter:
             market_id_map: Mapping of market slug -> webflow_id
             markets_by_event: Mapping of event_ticker -> list of markets (for analysis)
             
-        Returns: Number of events synced
+        Returns: 
+            Tuple of (number of events synced, list of events with generated analysis)
         """
         if not self.webflow_config or not self.webflow_config.is_configured:
             logger.warning("Webflow not configured, skipping event sync")
@@ -913,6 +914,9 @@ class KalshiDataExporter:
         inserted_count = 0
         updated_count = 0
         skipped_count = 0
+        
+        # Track events with generated analysis for CSV output
+        analyzed_events: List[Dict[str, Any]] = []
         
         # Initialize analysis generator if needed
         analysis_enabled = self._init_analysis_generator()
@@ -977,6 +981,10 @@ class KalshiDataExporter:
                             webflow_key = key.replace("_", "-")
                             field_data[webflow_key] = value
                         analysis_count += 1
+                        
+                        # Track analyzed event with all data for CSV output
+                        analyzed_event = {**event, **analysis}
+                        analyzed_events.append(analyzed_event)
                     except Exception as e:
                         logger.error(f"Analysis generation failed for {event_ticker}: {e}")
                 
@@ -1007,6 +1015,10 @@ class KalshiDataExporter:
                             field_data[webflow_key] = value
                         analysis_count += 1
                         
+                        # Track analyzed event with all data for CSV output
+                        analyzed_event = {**event, **analysis}
+                        analyzed_events.append(analyzed_event)
+                        
                         # Filter to only valid Webflow fields and update
                         filtered_field_data = self._filter_webflow_fields(field_data)
                         item_id = existing["id"]
@@ -1026,7 +1038,59 @@ class KalshiDataExporter:
             f"Webflow sync complete: Inserted={inserted_count}, Updated={updated_count}, "
             f"Skipped={skipped_count}, Analysis generated={analysis_count}"
         )
-        return inserted_count + updated_count
+        return inserted_count + updated_count, analyzed_events
+    
+    async def generate_analysis_for_events(
+        self,
+        events_rows: List[Dict[str, Any]],
+        markets_by_event: Dict[str, List[Dict[str, Any]]],
+        timestamp: str,
+        analysis_fields: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Generate analysis for events and write to CSV (without Webflow sync).
+        
+        This method is used when Webflow is not configured but analysis generation
+        is available. It generates analysis for test events and outputs to CSV.
+        
+        Args:
+            events_rows: List of event data dictionaries
+            markets_by_event: Mapping of event_ticker -> list of markets
+            timestamp: Timestamp string for output filename
+            analysis_fields: List of field names for CSV output
+            
+        Returns:
+            List of events with generated analysis
+        """
+        analyzed_events: List[Dict[str, Any]] = []
+        analysis_count = 0
+        max_analyses = self.MAX_TEST_ANALYSES if not self.full_analysis else len(events_rows)
+        
+        mode_str = "full" if self.full_analysis else f"test (max {self.MAX_TEST_ANALYSES})"
+        logger.info(f"Generating analysis for events (mode: {mode_str})")
+        
+        for event in events_rows:
+            if analysis_count >= max_analyses:
+                break
+            
+            event_ticker = event.get("event_ticker", "")
+            
+            logger.info(f"Generating analysis ({analysis_count + 1}/{max_analyses}): {event_ticker}")
+            event_markets = markets_by_event.get(event_ticker, [])
+            
+            try:
+                analysis = await self.analysis_generator.generate_analysis(event, event_markets)
+                # Merge event data with analysis
+                analyzed_event = {**event, **analysis}
+                analyzed_events.append(analyzed_event)
+                analysis_count += 1
+            except Exception as e:
+                logger.error(f"Analysis generation failed for {event_ticker}: {e}")
+        
+        # Write analysis CSV
+        if analyzed_events:
+            self.write_csv(f"analysis_{timestamp}.csv", analyzed_events, analysis_fields)
+        
+        return analyzed_events
     
     async def export(self):
         """Main export function."""
@@ -1160,6 +1224,30 @@ class KalshiDataExporter:
             
             logger.info("CSV export completed successfully!")
             
+            # Define analysis fields for CSV output
+            analysis_fields = [
+                # Core identity
+                "event_ticker", "name", "subtitle", "series_ticker", "series_category",
+                # Analysis metadata
+                "analysis_last_updated", "analysis_version", "analysis_owner",
+                # Executive Summary
+                "confidence_score", "model_probability", "market_probability",
+                "edge_pp", "expected_return", "r_score",
+                "executive_verdict", "executive_summary_richtext",
+                # Contract Snapshot
+                "kalshi_event_url", "contract_snapshot_summary", "market_discussion_summary",
+                # 5 Dynamic Questions
+                "q1_subtitle", "q1_table_richtext", "q1_paragraph_richtext",
+                "q2_subtitle", "q2_table_richtext", "q2_paragraph_richtext",
+                "q3_subtitle", "q3_table_richtext", "q3_paragraph_richtext",
+                "q4_subtitle", "q4_table_richtext", "q4_paragraph_richtext",
+                "q5_subtitle", "q5_table_richtext", "q5_paragraph_richtext",
+                # Catalysts
+                "what_could_change_subtitle", "what_could_change_paragraph_richtext",
+                # Transparency
+                "transparency_subtitle", "transparency_paragraph_richtext",
+            ]
+            
             # Sync to Webflow CMS
             if self.webflow_config and self.webflow_config.is_configured:
                 logger.info("Syncing to Webflow CMS...")
@@ -1172,7 +1260,12 @@ class KalshiDataExporter:
                     market_id_map = await self.sync_markets_to_webflow(markets_rows)
                     
                     # Sync events with market_page references and optional analysis
-                    await self.sync_events_to_webflow(events_rows, market_id_map, markets_by_event)
+                    _, analyzed_events = await self.sync_events_to_webflow(events_rows, market_id_map, markets_by_event)
+                    
+                    # Write analysis CSV for events that had analysis generated
+                    if analyzed_events:
+                        self.write_csv(f"analysis_{timestamp}.csv", analyzed_events, analysis_fields)
+                        logger.info(f"Wrote {len(analyzed_events)} analyzed events to analysis_{timestamp}.csv")
                     
                     logger.info("Webflow sync completed successfully!")
                 finally:
@@ -1181,7 +1274,20 @@ class KalshiDataExporter:
                     if self.analysis_generator:
                         await self.analysis_generator.close()
             else:
-                logger.info("Webflow not configured, skipping sync. Set WEBFLOW_* env vars to enable.")
+                # Even without Webflow, generate analysis for test events if analysis configs are available
+                analysis_enabled = self._init_analysis_generator()
+                if analysis_enabled:
+                    logger.info("Webflow not configured, generating analysis to CSV only...")
+                    analyzed_events = await self.generate_analysis_for_events(
+                        events_rows, markets_by_event, timestamp, analysis_fields
+                    )
+                    if analyzed_events:
+                        logger.info(f"Generated analysis for {len(analyzed_events)} events (CSV only mode)")
+                    # Close analysis generator
+                    if self.analysis_generator:
+                        await self.analysis_generator.close()
+                else:
+                    logger.info("Webflow not configured, skipping sync. Set WEBFLOW_* env vars to enable.")
             
         finally:
             await self.client.aclose()
