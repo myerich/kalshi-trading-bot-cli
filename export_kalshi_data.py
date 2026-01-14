@@ -1047,7 +1047,7 @@ class KalshiDataExporter:
         events_rows: List[Dict[str, Any]],
         markets_by_event: Dict[str, List[Dict[str, Any]]],
         timestamp: str,
-        analysis_fields: List[str]
+        output_fields: List[str]
     ) -> List[Dict[str, Any]]:
         """Generate analysis for events and write to CSV (without Webflow sync).
         
@@ -1058,7 +1058,7 @@ class KalshiDataExporter:
             events_rows: List of event data dictionaries
             markets_by_event: Mapping of event_ticker -> list of markets
             timestamp: Timestamp string for output filename
-            analysis_fields: List of field names for CSV output
+            output_fields: List of field names for CSV output (same as events_fields)
             
         Returns:
             List of events with generated analysis
@@ -1088,9 +1088,9 @@ class KalshiDataExporter:
             except Exception as e:
                 logger.error(f"Analysis generation failed for {event_ticker}: {e}")
         
-        # Write analysis CSV
+        # Write analysis CSV (same format as events CSV with analysis filled in)
         if analyzed_events:
-            self.write_csv(f"analysis_{timestamp}.csv", analyzed_events, analysis_fields)
+            self.write_csv(f"analysis_{timestamp}.csv", analyzed_events, output_fields)
         
         return analyzed_events
     
@@ -1226,37 +1226,13 @@ class KalshiDataExporter:
             
             logger.info("CSV export completed successfully!")
             
-            # Define analysis fields for CSV output
-            analysis_fields = [
-                # Core identity
-                "event_ticker", "name", "subtitle", "series_ticker", "series_category",
-                # Analysis metadata
-                "analysis_last_updated", "analysis_version", "analysis_owner",
-                # Executive Summary
-                "confidence_score", "model_probability", "market_probability",
-                "edge_pp", "expected_return", "r_score",
-                "executive_verdict", "executive_summary_richtext",
-                # Contract Snapshot
-                "kalshi_event_url", "contract_snapshot_summary", "market_discussion_summary",
-                # 5 Dynamic Questions
-                "q1_subtitle", "q1_table_richtext", "q1_paragraph_richtext",
-                "q2_subtitle", "q2_table_richtext", "q2_paragraph_richtext",
-                "q3_subtitle", "q3_table_richtext", "q3_paragraph_richtext",
-                "q4_subtitle", "q4_table_richtext", "q4_paragraph_richtext",
-                "q5_subtitle", "q5_table_richtext", "q5_paragraph_richtext",
-                # Catalysts
-                "what_could_change_subtitle", "what_could_change_paragraph_richtext",
-                # Transparency
-                "transparency_subtitle", "transparency_paragraph_richtext",
-            ]
-            
             # Handle analysis-only mode (skip Webflow sync)
             if self.analysis_only:
                 analysis_enabled = self._init_analysis_generator()
                 if analysis_enabled:
                     logger.info("Analysis-only mode: generating analysis to CSV (skipping Webflow sync)...")
                     analyzed_events = await self.generate_analysis_for_events(
-                        events_rows, markets_by_event, timestamp, analysis_fields
+                        events_rows, markets_by_event, timestamp, events_fields
                     )
                     if analyzed_events:
                         logger.info(f"Generated analysis for {len(analyzed_events)} events")
@@ -1281,7 +1257,7 @@ class KalshiDataExporter:
                     
                     # Write analysis CSV for events that had analysis generated
                     if analyzed_events:
-                        self.write_csv(f"analysis_{timestamp}.csv", analyzed_events, analysis_fields)
+                        self.write_csv(f"analysis_{timestamp}.csv", analyzed_events, events_fields)
                         logger.info(f"Wrote {len(analyzed_events)} analyzed events to analysis_{timestamp}.csv")
                     
                     logger.info("Webflow sync completed successfully!")
@@ -1296,7 +1272,7 @@ class KalshiDataExporter:
                 if analysis_enabled:
                     logger.info("Webflow not configured, generating analysis to CSV only...")
                     analyzed_events = await self.generate_analysis_for_events(
-                        events_rows, markets_by_event, timestamp, analysis_fields
+                        events_rows, markets_by_event, timestamp, events_fields
                     )
                     if analyzed_events:
                         logger.info(f"Generated analysis for {len(analyzed_events)} events (CSV only mode)")
