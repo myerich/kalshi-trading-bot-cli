@@ -148,7 +148,7 @@ export class EdgeComputer {
             model_prob: snapshot.modelProb,
             market_prob: snapshot.marketProb,
             edge: snapshot.edge,
-            confidence: Math.abs(snapshot.edge),
+            confidence: snapshot.confidence,
             drivers: snapshot.drivers.map((d) => d.claim),
           });
         }

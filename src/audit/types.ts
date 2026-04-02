@@ -1,3 +1,5 @@
+import type { ConfidenceLevel } from '../scan/types.js';
+
 export interface AuditBase {
   ts: string; // ISO 8601 UTC
   type: string;
@@ -32,7 +34,7 @@ export interface EdgeDetectedEvent extends AuditBase {
   model_prob: number;
   market_prob: number;
   edge: number;
-  confidence: number;
+  confidence: ConfidenceLevel;
   drivers: string[];
 }
 

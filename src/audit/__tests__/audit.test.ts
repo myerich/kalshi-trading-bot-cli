@@ -27,7 +27,7 @@ describe('AuditTrail', () => {
 
     trail.log({ type: 'SCAN_START', theme: 'crypto', events_count: 10 });
     trail.log({ type: 'OCTAGON_CALL', ticker: 'KXBTC-26MAR', variant: 'base', cache_hit: false, credits_used: 1 });
-    trail.log({ type: 'EDGE_DETECTED', ticker: 'KXBTC-26MAR', model_prob: 0.65, market_prob: 0.5, edge: 0.15, confidence: 0.8, drivers: ['momentum'] });
+    trail.log({ type: 'EDGE_DETECTED', ticker: 'KXBTC-26MAR', model_prob: 0.65, market_prob: 0.5, edge: 0.15, confidence: 'high', drivers: ['momentum'] });
     trail.log({ type: 'TRADE_EXECUTED', ticker: 'KXBTC-26MAR', order_id: 'ord-123', fill_price: 0.55, size: 100 });
     trail.log({ type: 'ALERT_SENT', alert_id: 'alert-1', channels: ['slack', 'email'] });
     trail.close();
@@ -51,7 +51,7 @@ describe('AuditTrail', () => {
     trail.log({ type: 'SCAN_START', theme: 'crypto', events_count: 5 });
     trail.log({ type: 'OCTAGON_CALL', ticker: 'KXBTC-26MAR', variant: 'base', cache_hit: false, credits_used: 1 });
     trail.log({ type: 'OCTAGON_CALL', ticker: 'KXETH-26MAR', variant: 'bull', cache_hit: true, credits_used: 0 });
-    trail.log({ type: 'EDGE_DETECTED', ticker: 'KXBTC-26MAR', model_prob: 0.7, market_prob: 0.5, edge: 0.2, confidence: 0.9, drivers: ['vol'] });
+    trail.log({ type: 'EDGE_DETECTED', ticker: 'KXBTC-26MAR', model_prob: 0.7, market_prob: 0.5, edge: 0.2, confidence: 'very_high', drivers: ['vol'] });
     trail.close();
 
     const octagonEvents = readAuditLog({ filePath: path, type: 'OCTAGON_CALL' });
