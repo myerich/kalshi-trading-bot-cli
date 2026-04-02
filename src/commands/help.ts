@@ -88,6 +88,11 @@ ${ctx === 'cli' ? `${p}` : 'bun start '}clear-cache                Delete the lo
 
 Use this when the local cache is corrupted or you want to start fresh.${ctx !== 'cli' ? '\nRun from terminal: bun start clear-cache' : ''}`,
 
+    init: `**${p}init** — Re-run setup wizard
+
+${p}init                       Launch the TUI with the setup wizard open
+                               Use this to configure or reconfigure API keys and preferences.`,
+
     help: `**${p}help** — Show help
 
 ${p}help                       Show all commands
@@ -127,6 +132,7 @@ Account:
   portfolio balance             Account balance
 
 System:
+  init                          Launch with setup wizard (configure API keys)
   clear-cache                   Delete local SQLite cache and start fresh
   setup                         Re-run setup wizard
   help [command]                Show help for a command
@@ -166,6 +172,7 @@ Account:
 System:
   /model                         Change LLM model/provider
   /setup                         Re-run setup wizard
+  init                           Launch with setup wizard (run: bun start init)
   clear-cache                    Delete local cache (run: bun start clear-cache)
   /help [command]                Show help for a command
   /quit                          Quit
