@@ -209,6 +209,7 @@ describe('OctagonClient', () => {
 
       const report = client.parseReport(json, 'MISSING-TICKER', 'EVENT-1', 'cache');
       expect(report.modelProb).toBeCloseTo(0.55, 4);  // falls back to event-level
+      expect(report.marketProb).toBeCloseTo(0.50, 4);
     });
 
     test('handles percentage values (e.g. "72%")', () => {

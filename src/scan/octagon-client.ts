@@ -142,10 +142,14 @@ export class OctagonClient {
           report = { ...defaults, cacheMiss: true };
           return report;
         }
-        // Check if model probability was actually provided
+        // Check if model probability was actually provided (event-level)
         const source = (versions?.[0] ?? parsed) as Record<string, unknown>;
         hasExplicitModelProb = (source.modelProb ?? source.model_prob ?? source.model_probability) != null;
         report = this.mapJsonToReport(parsed, defaults);
+        // Per-market probability from outcome_probabilities_json also counts as explicit
+        if (report.modelProb !== defaults.modelProb) {
+          hasExplicitModelProb = true;
+        }
       } else {
         report = this.extractFromMarkdown(raw, defaults);
       }
