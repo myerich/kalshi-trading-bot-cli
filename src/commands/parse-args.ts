@@ -182,6 +182,10 @@ export function parseArgs(argv: string[] = process.argv.slice(2)): ParsedArgs {
     }
   }
 
+  if (resolved && unresolved) {
+    parseErrors.push('Cannot use --resolved and --unresolved together');
+  }
+
   const first = positionalArgs.shift();
   const subcommand: Subcommand =
     first && (SUBCOMMANDS as readonly string[]).includes(first)

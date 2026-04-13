@@ -144,6 +144,15 @@ export function formatBacktestHuman(result: BacktestResult, opts?: FormatOpts): 
   return lines.join('\n');
 }
 
+/** Escape a CSV cell: wrap in quotes if it contains comma, quote, or newline. */
+function csvEscape(val: string | number): string {
+  const s = String(val);
+  if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
 /**
  * Export per-market detail to CSV.
  */
@@ -155,14 +164,14 @@ export function exportCSV(result: BacktestResult, path: string): void {
     for (const m of result.resolved.markets) {
       rows.push([
         'resolved',
-        m.ticker,
-        m.event_ticker,
+        csvEscape(m.ticker),
+        csvEscape(m.event_ticker),
         m.model_prob.toFixed(4),
         m.market_prob.toFixed(4),
         m.edge_pp.toFixed(1),
         m.outcome,
-        m.close_time,
-        m.series_category,
+        csvEscape(m.close_time),
+        csvEscape(m.series_category),
       ].join(','));
     }
   }
@@ -171,14 +180,14 @@ export function exportCSV(result: BacktestResult, path: string): void {
     for (const e of result.unresolved.edges) {
       rows.push([
         'unresolved',
-        e.ticker,
-        e.event_ticker,
+        csvEscape(e.ticker),
+        csvEscape(e.event_ticker),
         e.model_prob.toFixed(4),
         e.market_prob.toFixed(4),
         e.edge_pp.toFixed(1),
         '',
-        e.closes_at,
-        e.series_category,
+        csvEscape(e.closes_at),
+        csvEscape(e.series_category),
       ].join(','));
     }
   }

@@ -50,8 +50,11 @@ function classifyConfidence(absEdge: number): string {
  * Returns true if a new record was inserted, false if skipped.
  */
 function persistEvent(db: Database, event: OctagonEventEntry): boolean {
-  const capturedAt = Math.floor(new Date(event.captured_at).getTime() / 1000);
-  const closeTime = Math.floor(new Date(event.close_time).getTime() / 1000);
+  const capturedDate = new Date(event.captured_at);
+  const closeDate = new Date(event.close_time);
+  if (isNaN(capturedDate.getTime()) || isNaN(closeDate.getTime())) return false;
+  const capturedAt = Math.floor(capturedDate.getTime() / 1000);
+  const closeTime = Math.floor(closeDate.getTime() / 1000);
 
   // Probabilities from the events API are percentages (0-100)
   const modelProb = event.model_probability / 100;

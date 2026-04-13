@@ -33,8 +33,11 @@ async function fetchEventMarkets(eventTicker: string): Promise<KalshiMarket[]> {
     const response = await callKalshiApi('GET', `/events/${eventTicker}`, {
       params: { with_nested_markets: true },
     });
-    const event = (response as any).event ?? response;
-    return ((event as any).markets ?? []) as KalshiMarket[];
+    if (!response || typeof response !== 'object') return [];
+    const obj = response as Record<string, unknown>;
+    const event = (obj.event ?? obj) as Record<string, unknown>;
+    const markets = event.markets;
+    return Array.isArray(markets) ? markets as KalshiMarket[] : [];
   } catch {
     return [];
   }
@@ -73,8 +76,14 @@ export async function discoverSettledMarkets(
   const events = db.query(query).all(params) as Array<{ event_ticker: string; category: string | null }>;
   logger.info(`[backtest] Found ${events.length} events with Octagon history`);
 
+  // Normalize date-only strings: fromDate → start of day, toDate → end of day
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/;
   const fromDate = opts?.from ? new Date(opts.from) : null;
-  const toDate = opts?.to ? new Date(opts.to) : null;
+  const toDate = opts?.to
+    ? (isDateOnly.test(opts.to)
+      ? new Date(opts.to + 'T23:59:59.999Z')
+      : new Date(opts.to))
+    : null;
 
   // Look up which events are mutually_exclusive (multi-outcome bracket events)
   const meRows = db.query(
