@@ -20,6 +20,7 @@ function defaultArgs(overrides: Partial<ParsedArgs>): ParsedArgs {
     ...overrides,
   };
 }
+import { handleBacktest, formatBacktestHuman } from './backtest.js';
 import { handleAnalyze, formatAnalyzeHuman } from './analyze.js';
 import { handlePortfolio, formatPortfolioHuman } from './portfolio.js';
 import { reviewPortfolio, formatReviewHuman } from './review.js';
@@ -90,6 +91,30 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
     // ─── /review ─────────────────────────────────────────────────────
     case 'review':
       return handleReviewCommand();
+
+    // ─── /backtest ───────────────────────────────────────────────────
+    case 'backtest': {
+      // Parse backtest-specific flags from slash command args
+      const btArgs: Partial<ParsedArgs> = { subcommand: 'backtest' };
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--resolved') btArgs.resolved = true;
+        else if (a === '--unresolved') btArgs.unresolved = true;
+        else if (a === '--category') btArgs.category = args[++i];
+        else if (a === '--from') btArgs.from = args[++i];
+        else if (a === '--to') btArgs.to = args[++i];
+        else if (a === '--min-edge') { const v = Number(args[++i]?.replace('%', '')); if (Number.isFinite(v)) btArgs.minEdge = v / 100; }
+        else if (a === '--min-hours-before-close') { const v = Number(args[++i]); if (Number.isFinite(v)) btArgs.minHoursBeforeClose = v; }
+        else if (a === '--snapshot' && args[i + 1] === 'last') { btArgs.snapshotLast = true; i++; }
+      }
+      const resp = await handleBacktest(defaultArgs(btArgs));
+      if (!resp.ok || !resp.data) return { output: resp.error?.message ?? 'Backtest failed' };
+      return { output: formatBacktestHuman(resp.data, {
+        minEdge: btArgs.minEdge ?? 0.05,
+        minHoursBeforeClose: btArgs.minHoursBeforeClose ?? 24,
+        snapshotLast: btArgs.snapshotLast,
+      }) };
+    }
 
     case 'config':
       // Fall through to agent — better handled by the LLM

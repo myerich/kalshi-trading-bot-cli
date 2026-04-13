@@ -65,7 +65,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
               event_ticker: m.event_ticker,
               model_prob: snap.model_probability / 100,
               market_prob: snap.market_probability / 100,
-              edge_pp: (snap.model_probability - snap.market_probability),
+              edge_pp: Math.round((snap.model_probability - snap.market_probability) * 10) / 10,
               hours_before_close: hoursBefore,
               confidence_score: snap.confidence_score ?? 0,
               series_category: m.series_category,
@@ -97,13 +97,13 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
     for (const m of openMarkets) {
       // Get latest Octagon model_prob from local cache
       const report = db.query(
-        "SELECT model_prob FROM octagon_reports WHERE event_ticker = $et AND variant_used = 'events-api' ORDER BY fetched_at DESC LIMIT 1",
-      ).get({ $et: m.event_ticker }) as { model_prob: number } | null;
+        "SELECT model_prob, market_prob FROM octagon_reports WHERE event_ticker = $et AND variant_used = 'events-api' ORDER BY fetched_at DESC LIMIT 1",
+      ).get({ $et: m.event_ticker }) as { model_prob: number; market_prob: number | null } | null;
 
       if (!report) continue;
 
       const modelProb = report.model_prob;
-      const edgePp = (modelProb - m.market_prob) * 100;
+      const edgePp = Math.round((modelProb - m.market_prob) * 1000) / 10;
 
       if (Math.abs(edgePp) < minEdge * 100) continue;
 
@@ -114,7 +114,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
         market_prob: m.market_prob,
         edge_pp: edgePp,
         direction: edgePp > 0 ? 'YES' : 'NO',
-        confidence_score: 0,
+        confidence_score: 0, // events API confidence_score not persisted in octagon_reports
         closes_at: m.close_time,
         series_category: m.series_category,
       });
