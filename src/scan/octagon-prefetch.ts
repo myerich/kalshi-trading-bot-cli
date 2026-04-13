@@ -2,7 +2,6 @@ import type { Database } from 'bun:sqlite';
 import { fetchAllOctagonEvents, type OctagonEventEntry } from './octagon-events-api.js';
 import { insertReport, getLatestReport, getTtlForCloseTime } from '../db/octagon-cache.js';
 import { insertEdge } from '../db/edge.js';
-import { logger } from '../utils/logger.js';
 
 const PREFETCH_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
 const META_KEY = 'octagon_prefetch_at';
@@ -16,6 +15,7 @@ function shouldPrefetch(db: Database): boolean {
   }) as { value: string } | null;
   if (!row) return true;
   const lastPrefetch = parseInt(row.value, 10);
+  if (!Number.isFinite(lastPrefetch)) return true;
   return Date.now() - lastPrefetch > PREFETCH_COOLDOWN_MS;
 }
 
@@ -104,8 +104,12 @@ function persistEvent(db: Database, event: OctagonEventEntry): boolean {
       cache_miss: 0,
       confidence: classifyConfidence(Math.abs(edge)),
     });
-  } catch {
+  } catch (err) {
     // UNIQUE constraint violation if edge already exists for this ticker+timestamp — OK
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('UNIQUE') && !msg.includes('constraint')) {
+      throw err;
+    }
   }
 
   return true;
@@ -117,7 +121,6 @@ function persistEvent(db: Database, event: OctagonEventEntry): boolean {
  */
 export async function prefetchOctagonEvents(db: Database): Promise<{ inserted: number; skipped: number }> {
   if (!shouldPrefetch(db)) {
-    logger.info('[octagon-prefetch] Skipping — last prefetch within cooldown');
     return { inserted: 0, skipped: 0 };
   }
 
@@ -151,9 +154,7 @@ export async function prefetchOctagonEvents(db: Database): Promise<{ inserted: n
       if (hh) historyCount++;
     }
   })();
-  logger.info(`[octagon-prefetch] Marked ${historyCount}/${events.length} events with history`);
 
   markPrefetchDone(db);
-  logger.info(`[octagon-prefetch] Done: ${inserted} inserted, ${skipped} skipped (${events.length} total events)`);
   return { inserted, skipped };
 }

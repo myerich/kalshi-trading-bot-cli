@@ -1,5 +1,3 @@
-import { logger } from '../utils/logger.js';
-
 /**
  * A single event entry from the Octagon Prediction Markets Events API.
  * Probabilities are percentages (0-100).
@@ -80,11 +78,21 @@ export async function fetchAllOctagonEvents(opts?: { hasHistory?: boolean }): Pr
       throw new Error(`Octagon events API ${resp.status}: ${body.slice(0, 200)}`);
     }
 
-    const page = (await resp.json()) as EventsPage;
-    all.push(...page.data);
-    cursor = page.has_more ? page.next_cursor : null;
+    const page = (await resp.json()) as unknown;
+    if (!page || typeof page !== 'object') {
+      throw new Error('Octagon events API returned invalid response shape');
+    }
+    const p = page as Record<string, unknown>;
+    if (!Array.isArray(p.data)) {
+      throw new Error('Octagon events API response missing data array');
+    }
+    const hasMore = typeof p.has_more === 'boolean' ? p.has_more : false;
+    if (hasMore && !p.next_cursor) {
+      throw new Error('Octagon events API has_more=true but next_cursor is missing');
+    }
+    all.push(...(p.data as OctagonEventEntry[]));
+    cursor = hasMore ? (p.next_cursor as string) : null;
     pageNum++;
-    logger.info(`[octagon-prefetch] Page ${pageNum}: ${page.data.length} events (total ${all.length})`);
   } while (cursor);
 
   return all;
