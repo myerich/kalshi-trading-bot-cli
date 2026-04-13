@@ -107,7 +107,9 @@ function formatTimeUntil(isoDate: string): string {
   if (days >= 365) return `${(days / 365).toFixed(1)} yrs`;
   if (days >= 1) return `${Math.round(days)} days`;
   const hours = diff / (1000 * 60 * 60);
-  return `${Math.round(hours)}h`;
+  if (hours >= 1) return `${Math.round(hours)}h`;
+  const minutes = diff / (1000 * 60);
+  return minutes >= 1 ? `${Math.round(minutes)}m` : '< 1m';
 }
 
 export interface FormatOpts {

@@ -146,17 +146,14 @@ export async function prefetchOctagonEvents(db: Database): Promise<{ inserted: n
     `UPDATE octagon_reports SET has_history = $hh, mutually_exclusive = $me, series_category = $sc
      WHERE event_ticker = $et AND variant_used = 'events-api'`,
   );
-  let historyCount = 0;
   db.transaction(() => {
     for (const event of events) {
-      const hh = event.has_history ? 1 : 0;
       markMeta.run({
         $et: event.event_ticker,
-        $hh: hh,
+        $hh: event.has_history ? 1 : 0,
         $me: event.mutually_exclusive ? 1 : 0,
         $sc: event.series_category ?? null,
       });
-      if (hh) historyCount++;
     }
   })();
 

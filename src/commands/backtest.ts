@@ -7,7 +7,6 @@ import { fetchAndCacheHistory, selectSnapshot } from '../backtest/fetcher.js';
 import { computeResolvedMetrics } from '../backtest/metrics.js';
 import type { BacktestResult, ResolvedMarket, UnresolvedEdge } from '../backtest/types.js';
 import { formatBacktestHuman, exportCSV, type FormatOpts } from '../backtest/renderer.js';
-import { logger } from '../utils/logger.js';
 
 export { formatBacktestHuman };
 export type { FormatOpts };
@@ -28,7 +27,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
 
   // ─── RESOLVED ──────────────────────────────────────────────────────────
   if (!args.unresolved) {
-    logger.info('[backtest] Discovering settled markets with Octagon coverage...');
+
     const settled = await discoverSettledMarkets(db, {
       category: args.category,
       from: dateRange.from,
@@ -36,7 +35,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
     });
 
     if (settled.length > 0) {
-      logger.info(`[backtest] Fetching Octagon history for ${settled.length} settled markets...`);
+
       const resolvedMarkets: ResolvedMarket[] = [];
 
       // Group by event_ticker to batch history fetches
@@ -75,7 +74,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
             });
           }
         } catch (err) {
-          logger.warn(`[backtest] Failed history for ${eventTicker}: ${err instanceof Error ? err.message : err}`);
+          // History fetch failed for this event — skip
         }
       }
 
@@ -91,7 +90,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
 
   // ─── UNRESOLVED ────────────────────────────────────────────────────────
   if (!args.resolved) {
-    logger.info('[backtest] Discovering open markets with Octagon coverage...');
+
     const openMarkets = await discoverOpenMarkets(db, { category: args.category });
 
     const edges: UnresolvedEdge[] = [];
@@ -140,7 +139,7 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   // Export CSV if requested
   if (args.exportPath) {
     exportCSV(result, args.exportPath);
-    logger.info(`[backtest] Exported results to ${args.exportPath}`);
+
   }
 
   return wrapSuccess('backtest', result);

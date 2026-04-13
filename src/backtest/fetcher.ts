@@ -122,9 +122,9 @@ export async function fetchAndCacheHistory(
           $market_probability: s.market_probability,
           $edge_pp: s.edge_pp,
           $confidence_score: s.confidence_score,
-          $series_category: s.series_category ?? '',
-          $close_time: s.close_time ?? '',
-          $name: s.name ?? '',
+          $series_category: s.series_category ?? null,
+          $close_time: s.close_time ?? null,
+          $name: s.name ?? null,
         });
       }
     })();
