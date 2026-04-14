@@ -60,6 +60,11 @@ function persistEvent(db: Database, event: OctagonEventEntry): boolean {
   const modelProb = event.model_probability / 100;
   const marketProb = event.market_probability / 100;
 
+  // Always update close_time on existing events-api reports (backfill)
+  db.prepare(
+    "UPDATE octagon_reports SET close_time = $ct WHERE event_ticker = $et AND variant_used = 'events-api' AND close_time IS NULL",
+  ).run({ $et: event.event_ticker, $ct: event.close_time ?? null });
+
   // Skip if we already have a fresher report for this event
   const existing = getLatestReport(db, event.event_ticker);
   if (existing && existing.fetched_at >= capturedAt) return false;
@@ -93,7 +98,7 @@ function persistEvent(db: Database, event: OctagonEventEntry): boolean {
 
     db.prepare(
       `UPDATE octagon_reports SET has_history = $hh, mutually_exclusive = $me, series_category = $sc,
-         confidence_score = $cs, outcome_probabilities_json = $opj
+         confidence_score = $cs, outcome_probabilities_json = $opj, close_time = $ct
        WHERE report_id = $rid`,
     ).run({
       $rid: reportId,
@@ -102,6 +107,7 @@ function persistEvent(db: Database, event: OctagonEventEntry): boolean {
       $sc: event.series_category ?? null,
       $cs: event.confidence_score ?? null,
       $opj: event.outcome_probabilities ? JSON.stringify(event.outcome_probabilities) : null,
+      $ct: event.close_time ?? null,
     });
   })();
 

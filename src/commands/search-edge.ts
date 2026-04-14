@@ -29,9 +29,11 @@ export function scanEdges(
   const limit = opts?.limit ?? 20;
   const category = opts?.category;
 
+  const nowIso = new Date().toISOString();
   let inner = `SELECT event_ticker, MAX(fetched_at) as max_fetched
-    FROM octagon_reports WHERE variant_used = 'events-api' AND outcome_probabilities_json IS NOT NULL`;
-  const params: Record<string, string> = {};
+    FROM octagon_reports WHERE variant_used = 'events-api' AND outcome_probabilities_json IS NOT NULL
+    AND (close_time IS NULL OR close_time > $now)`;
+  const params: Record<string, string> = { $now: nowIso };
   if (category) {
     inner += ' AND LOWER(series_category) LIKE $cat';
     params.$cat = `%${category.toLowerCase()}%`;
@@ -65,9 +67,8 @@ export function scanEdges(
     for (const o of outcomes) {
       if (typeof o.model_probability !== 'number' || typeof o.market_probability !== 'number') continue;
       if (!o.market_ticker) continue;
-      // Skip resolved/illiquid markets where either probability is near 0% or 100%
-      if (o.market_probability < 1 || o.market_probability > 99) continue;
-      if (o.model_probability < 1 || o.model_probability > 99) continue;
+      // Skip illiquid markets with no trading activity
+      if (o.market_probability <= 0) continue;
       totalScanned++;
       const edgePp = Math.round((o.model_probability - o.market_probability) * 10) / 10;
       if (Math.abs(edgePp) < minEdgePp) continue;

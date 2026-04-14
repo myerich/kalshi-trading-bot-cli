@@ -216,6 +216,9 @@ export function migrate(db: Database): void {
   if (!reportCols.some((c) => c.name === 'outcome_probabilities_json')) {
     db.exec(`ALTER TABLE octagon_reports ADD COLUMN outcome_probabilities_json TEXT`);
   }
+  if (!reportCols.some((c) => c.name === 'close_time')) {
+    db.exec(`ALTER TABLE octagon_reports ADD COLUMN close_time TEXT`);
+  }
 
   const historyCols = db.query(`PRAGMA table_info(octagon_history)`).all() as Array<{ name: string }>;
   if (!historyCols.some((c) => c.name === 'outcome_probabilities_json')) {
