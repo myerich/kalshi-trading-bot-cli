@@ -504,15 +504,18 @@ export async function runCli(options?: { forceSetup?: boolean }) {
         const cmdResult = await handleSlashCommand(query);
         if (cmdResult !== null) {
           const formatted = formatResponse(cmdResult.output);
-          chatLog.finalizeAnswer(formatted);
+          const answerBox = chatLog.finalizeAnswer(formatted);
           tui.requestRender();
 
-          // If the command has an async follow-up (e.g., backtest), run it with the spinner still active
+          // If the command has an async follow-up (e.g., backtest), animate the spinner while it runs
           if (cmdResult.asyncFollowUp) {
+            answerBox.startSpinner(tui);
             try {
               const followUp = await cmdResult.asyncFollowUp();
+              answerBox.stopSpinner();
               chatLog.finalizeAnswer(formatResponse(followUp));
             } catch (err) {
+              answerBox.stopSpinner();
               chatLog.finalizeAnswer(`Error: ${err instanceof Error ? err.message : String(err)}`);
             }
           }
