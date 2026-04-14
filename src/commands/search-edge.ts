@@ -65,6 +65,8 @@ export function scanEdges(
     for (const o of outcomes) {
       if (typeof o.model_probability !== 'number' || typeof o.market_probability !== 'number') continue;
       if (!o.market_ticker) continue;
+      // Skip markets with 0% or 100% market price (no liquidity or already settled)
+      if (o.market_probability <= 0 || o.market_probability >= 100) continue;
       totalScanned++;
       const edgePp = Math.round((o.model_probability - o.market_probability) * 10) / 10;
       if (Math.abs(edgePp) < minEdgePp) continue;
