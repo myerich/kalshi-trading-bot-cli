@@ -365,6 +365,8 @@ export async function runCli(options?: { forceSetup?: boolean }) {
     { name: 'buy', description: 'Buy contracts (defaults to YES side)', getArgumentCompletions: usageHint('<ticker> <count> [price] [yes|no]', 'e.g. KXBTC-26MAR14-T50049 10 56') },
     { name: 'sell', description: 'Sell contracts (defaults to YES side)', getArgumentCompletions: usageHint('<ticker> <count> [price] [yes|no]', 'e.g. KXBTC-26MAR14-T50049 10 56') },
     { name: 'cancel', description: 'Cancel a resting order', getArgumentCompletions: usageHint('<order_id>', 'the order UUID') },
+    // Analysis
+    { name: 'backtest', description: 'Model accuracy scorecard + live edge scanner' },
     // Utility
     { name: 'help', description: 'Show help (/help <command> for details)', getArgumentCompletions: helpTopicCompletions },
     { name: 'model', description: 'Change LLM model/provider', getArgumentCompletions: usageHint('<provider:model>', 'e.g. anthropic:sonnet') },
