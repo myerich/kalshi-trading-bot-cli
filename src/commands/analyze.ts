@@ -163,8 +163,10 @@ export async function handleAnalyze(
   const edgeComputer = new EdgeComputer(db, auditTrail);
 
   // Use cache by default; only refresh when explicitly requested
+  // Try prefetch first to avoid an individual Octagon API call
   let variant: 'cache' | 'refresh' = refresh ? 'refresh' : 'cache';
-  let report = await octagonClient.fetchReport(resolvedTicker, eventTicker, variant);
+  let report = (!refresh ? octagonClient.tryFromPrefetch(resolvedTicker, eventTicker) : null)
+    ?? await octagonClient.fetchReport(resolvedTicker, eventTicker, variant);
 
   // If cache returned no meaningful data, auto-fetch fresh
   let usedFresh = refresh;

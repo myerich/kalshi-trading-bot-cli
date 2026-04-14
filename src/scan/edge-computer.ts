@@ -101,7 +101,11 @@ export class EdgeComputer {
 
       const results = await Promise.allSettled(
         reservedBatch.map(async (task) => {
-          const report = await octagonClient.fetchReport(
+          // Try prefetch first to avoid individual cache API calls
+          const prefetched = task.reservedVariant === 'cache'
+            ? octagonClient.tryFromPrefetch(task.market.ticker, task.eventTicker, task.market.close_time)
+            : null;
+          const report = prefetched ?? await octagonClient.fetchReport(
             task.market.ticker, task.eventTicker, task.reservedVariant,
             { creditsPreReserved: true, closeTimeIso: task.market.close_time },
           );
