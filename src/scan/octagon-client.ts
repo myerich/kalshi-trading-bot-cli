@@ -55,8 +55,9 @@ export class OctagonClient {
       `SELECT model_prob, market_prob, mispricing_signal, drivers_json, fetched_at, expires_at,
               outcome_probabilities_json, report_id, confidence_score
        FROM octagon_reports WHERE event_ticker = $et AND variant_used = 'events-api'
+       AND (close_time IS NULL OR close_time > $now)
        ORDER BY fetched_at DESC LIMIT 1`,
-    ).get({ $et: eventTicker }) as {
+    ).get({ $et: eventTicker, $now: new Date().toISOString() }) as {
       model_prob: number; market_prob: number | null; mispricing_signal: string | null;
       drivers_json: string | null; fetched_at: number; expires_at: number;
       outcome_probabilities_json: string | null; report_id: string;

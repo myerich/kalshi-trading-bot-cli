@@ -892,11 +892,12 @@ export class BrowseController {
       const row = db.query(
         `SELECT outcome_probabilities_json FROM octagon_reports
          WHERE variant_used = 'events-api' AND outcome_probabilities_json IS NOT NULL
+         AND (close_time IS NULL OR close_time > $now)
          AND (event_ticker = $t OR event_ticker IN (
            SELECT event_ticker FROM octagon_reports WHERE ticker = $t AND variant_used != 'events-api' LIMIT 1
          ))
          ORDER BY fetched_at DESC LIMIT 1`,
-      ).get({ $t: ticker }) as { outcome_probabilities_json: string } | null;
+      ).get({ $t: ticker, $now: new Date().toISOString() }) as { outcome_probabilities_json: string } | null;
 
       if (row?.outcome_probabilities_json) {
         const outcomes = JSON.parse(row.outcome_probabilities_json) as Array<{
