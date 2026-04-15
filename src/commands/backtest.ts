@@ -115,57 +115,28 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
 
       if (!report) continue;
 
-      // Try to get historical snapshot from N days ago for market_then
-      // Fall back to the prefetched events API market_probability if no history
-      let modelProb: number;
-      let marketThen: number;
-      let confidenceScore = report.confidence_score ?? 0;
+      // Get historical snapshot from N days ago for market_then
+      // Skip markets without a valid historical snapshot — using current price
+      // as market_then would make brier(market_then, market_now) ≈ 0
+      const historyRow = db.query(
+        `SELECT model_probability, market_probability, confidence_score, outcome_probabilities_json
+         FROM octagon_history WHERE event_ticker = $et AND captured_at <= $cutoff
+         ORDER BY captured_at DESC LIMIT 1`,
+      ).get({ $et: m.event_ticker, $cutoff: lookbackDate.toISOString() }) as {
+        model_probability: number; market_probability: number;
+        confidence_score: number | null; outcome_probabilities_json: string | null;
+      } | null;
 
-      // Check if we have cached history for this event
-      const historyCount = db.query(
-        'SELECT COUNT(*) as cnt FROM octagon_history WHERE event_ticker = $et',
-      ).get({ $et: m.event_ticker }) as { cnt: number };
+      if (!historyRow) continue; // No snapshot old enough — skip this market
 
-      if (historyCount.cnt > 0) {
-        // Use historical snapshot from N days ago
-        const rows = db.query(
-          `SELECT model_probability, market_probability, confidence_score, outcome_probabilities_json
-           FROM octagon_history WHERE event_ticker = $et AND captured_at <= $cutoff
-           ORDER BY captured_at DESC LIMIT 1`,
-        ).get({ $et: m.event_ticker, $cutoff: lookbackDate.toISOString() }) as {
-          model_probability: number; market_probability: number;
-          confidence_score: number | null; outcome_probabilities_json: string | null;
-        } | null;
-
-        if (rows) {
-          let outcomes: OutcomeProbability[] | null = null;
-          if (rows.outcome_probabilities_json) {
-            try { outcomes = JSON.parse(rows.outcome_probabilities_json); } catch { /* skip */ }
-          }
-          const perMarket = findOutcomeProb(outcomes, m.ticker);
-          modelProb = perMarket?.modelProb ?? rows.model_probability;
-          marketThen = perMarket?.marketProb ?? rows.market_probability;
-          confidenceScore = rows.confidence_score ?? confidenceScore;
-        } else {
-          // No snapshot old enough — use current prefetched data
-          let outcomes: OutcomeProbability[] | null = null;
-          if (report.outcome_probabilities_json) {
-            try { outcomes = JSON.parse(report.outcome_probabilities_json); } catch { /* skip */ }
-          }
-          const perMarket = findOutcomeProb(outcomes, m.ticker);
-          modelProb = perMarket ? perMarket.modelProb : report.model_prob * 100;
-          marketThen = perMarket ? perMarket.marketProb : m.market_prob * 100;
-        }
-      } else {
-        // No history — use current prefetched data as both model and market_then
-        let outcomes: OutcomeProbability[] | null = null;
-        if (report.outcome_probabilities_json) {
-          try { outcomes = JSON.parse(report.outcome_probabilities_json); } catch { /* skip */ }
-        }
-        const perMarket = findOutcomeProb(outcomes, m.ticker);
-        modelProb = perMarket ? perMarket.modelProb : report.model_prob * 100;
-        marketThen = perMarket ? perMarket.marketProb : m.market_prob * 100;
+      let outcomes: OutcomeProbability[] | null = null;
+      if (historyRow.outcome_probabilities_json) {
+        try { outcomes = JSON.parse(historyRow.outcome_probabilities_json); } catch { /* skip */ }
       }
+      const perMarket = findOutcomeProb(outcomes, m.ticker);
+      const modelProb = perMarket?.modelProb ?? historyRow.model_probability;
+      const marketThen = perMarket?.marketProb ?? historyRow.market_probability;
+      const confidenceScore = historyRow.confidence_score ?? report.confidence_score ?? 0;
 
       const marketNow = m.market_prob * 100; // current Kalshi price (0-100)
       const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
