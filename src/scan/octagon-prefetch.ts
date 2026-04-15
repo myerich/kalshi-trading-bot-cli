@@ -61,7 +61,7 @@ function persistEvent(db: Database, event: OctagonEventEntry): boolean {
   const marketProb = event.market_probability / 100;
 
   // Skip events with no model analysis (incomplete/empty)
-  if (event.model_probability === 0 && event.market_probability === 0) return false;
+  if (event.model_probability === 0 || event.model_probability == null) return false;
 
   // Always update close_time on existing events-api reports (backfill)
   db.prepare(
