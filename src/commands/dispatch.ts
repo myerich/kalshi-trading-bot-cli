@@ -253,7 +253,7 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
         console.log(JSON.stringify(resp));
       } else if (resp.ok && resp.data) {
         console.log(formatBacktestHuman(resp.data, {
-          minEdge: args.minEdge ?? 0.05,
+          minEdge: args.minEdge ?? 0.005,
         }));
       } else {
         console.error(resp.error?.message ?? 'Backtest failed');

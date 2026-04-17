@@ -55,7 +55,7 @@ function brier(forecast: number, outcome: number): number {
 /**
  * Compute all backtest metrics from a unified list of scored signals.
  */
-export function computeMetrics(signals: ScoredSignal[], minEdgePp = 5): Omit<BacktestResult, 'subscription_notice'> {
+export function computeMetrics(signals: ScoredSignal[], minEdgePp = 0.5): Omit<BacktestResult, 'subscription_notice'> {
   const n = signals.length;
   if (n === 0) {
     return {
@@ -73,6 +73,7 @@ export function computeMetrics(signals: ScoredSignal[], minEdgePp = 5): Omit<Bac
       hit_rate_ci: [0, 0],
       flat_bet_pnl: 0,
       flat_bet_roi: 0,
+      total_capital: 0,
       signals: [],
     };
   }
@@ -120,9 +121,11 @@ export function computeMetrics(signals: ScoredSignal[], minEdgePp = 5): Omit<Bac
     return sample.reduce((a, b) => a + b, 0) / sample.length;
   });
 
-  // P&L: already computed per signal
+  // P&L and capital-weighted ROI (matches Supabase methodology):
+  //   ROI = sum(pnl) / sum(capital) across edge signals.
   const pnl = edgeSignals.reduce((sum, s) => sum + s.pnl, 0);
-  const roi = edgeCount > 0 ? pnl / edgeCount : 0;
+  const totalCapital = edgeSignals.reduce((sum, s) => sum + s.capital, 0);
+  const roi = totalCapital > 0 ? pnl / totalCapital : 0;
 
   // Counts
   const uniqueEvents = new Set(signals.map(s => s.event_ticker));
@@ -156,6 +159,7 @@ export function computeMetrics(signals: ScoredSignal[], minEdgePp = 5): Omit<Bac
     hit_rate_ci: hitRateCI,
     flat_bet_pnl: pnl,
     flat_bet_roi: roi,
+    total_capital: totalCapital,
     signals,
   };
 }

@@ -8,17 +8,50 @@ import { computeMetrics } from '../backtest/metrics.js';
 import type { BacktestResult, ScoredSignal } from '../backtest/types.js';
 import { formatBacktestHuman, exportCSV, type FormatOpts } from '../backtest/renderer.js';
 
-/** Look up per-market model/market probability from outcome_probabilities array (0-100 scale). */
+/** Look up the per-contract outcome entry from outcome_probabilities array. */
 function findOutcomeProb(
   outcomes: OutcomeProbability[] | null | undefined,
   marketTicker: string,
-): { modelProb: number; marketProb: number } | null {
+): OutcomeProbability | null {
   if (!outcomes || !Array.isArray(outcomes)) return null;
   const match = outcomes.find(
     o => o.market_ticker.toUpperCase() === marketTicker.toUpperCase(),
   );
-  if (!match) return null;
-  return { modelProb: match.model_probability, marketProb: match.market_probability };
+  return match ?? null;
+}
+
+/** Absolute-edge bucket label matching the Supabase-methodology buckets. */
+function edgeBucketLabel(edgePp: number): string {
+  const abs = Math.abs(edgePp);
+  if (abs < 5) return '0-5%';
+  if (abs < 10) return '5-10%';
+  if (abs < 20) return '10-20%';
+  if (abs < 30) return '20-30%';
+  if (abs < 40) return '30-40%';
+  if (abs < 50) return '40-50%';
+  if (abs < 60) return '50-60%';
+  if (abs < 70) return '60-70%';
+  if (abs < 80) return '70-80%';
+  if (abs < 90) return '80-90%';
+  return '90%+';
+}
+
+/**
+ * Return the tradeable volume for a contract.
+ * Prefers per-contract volume fields from the Octagon snapshot (as the
+ * Supabase methodology does); falls back to Kalshi lifetime volume for
+ * older cached snapshots that pre-date the API's per-contract volume.
+ */
+function contractVolume(
+  perContract: OutcomeProbability | null,
+  fallbackLifetimeVolume: number,
+): number {
+  if (perContract) {
+    const v = typeof perContract.volume === 'number' ? perContract.volume : null;
+    const v24 = typeof perContract.volume_24h === 'number' ? perContract.volume_24h : null;
+    if (v !== null || v24 !== null) return Math.max(v ?? 0, v24 ?? 0);
+  }
+  return fallbackLifetimeVolume;
 }
 
 export { formatBacktestHuman };
@@ -28,7 +61,9 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
   const db = getDb();
   const days = args.days ?? 30;
   const maxAgeDays = args.maxAge ?? days;
-  const minEdge = args.minEdge ?? 0.05;
+  // Default 0.5pp matches the Supabase reference methodology — enough to
+  // skip near-zero-edge noise without excluding the 0-5% bucket.
+  const minEdge = args.minEdge ?? 0.005;
   const minEdgePp = minEdge * 100;
   const minVolume = args.minVolume ?? 1;
   const minPrice = args.minPrice ?? 5;   // 0-100 scale
@@ -70,26 +105,40 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
           if (!snap) continue;
 
           for (const m of markets) {
-            // Per-market probability from outcome_probabilities (0-100 scale)
+            // Strict per-contract extraction — no event-level fallback.
             const perMarket = findOutcomeProb(snap.outcome_probabilities, m.ticker);
-            const modelProb = perMarket?.modelProb ?? snap.model_probability;
-            const marketThen = perMarket?.marketProb ?? snap.market_probability;
+            if (!perMarket) continue;
+            const modelProb = perMarket.model_probability;
+            const marketThen = perMarket.market_probability;
+            if (!Number.isFinite(modelProb) || !Number.isFinite(marketThen)) continue;
             const marketNow = m.result === 'yes' ? 100 : 0;
             const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
 
-            // Tradeable filters: skip contracts we couldn't actually trade.
-            // Use lifetime volume (24h volume drops to 0 after settlement).
+            // Tradeable filter — per-contract volume from the Octagon snapshot
+            // (matches Supabase methodology); falls back to Kalshi lifetime
+            // volume for pre-API-change cached snapshots.
+            const vol = contractVolume(perMarket, m.volume);
+            if (vol < minVolume) continue;
             // Price is marketThen (the price you'd transact at for a resolved bet).
-            if (m.volume < minVolume) continue;
             if (marketThen < minPrice || marketThen > maxPrice) continue;
 
-            // P&L: Buy YES if edge > 0, Buy NO if edge < 0
+            // P&L and capital per $1 face value.
             let pnl = 0;
+            let capital = 0;
             if (edgePp > 0) {
-              pnl = (marketNow - marketThen) / 100;  // bought YES at marketThen, settled at marketNow
+              // Buy YES at marketThen, settles at marketNow
+              pnl = (marketNow - marketThen) / 100;
+              capital = marketThen / 100;
             } else if (edgePp < 0) {
-              pnl = (marketThen - marketNow) / 100;  // bought NO at (100-marketThen), settled at (100-marketNow)
+              // Buy NO at (100 - marketThen), settles at (100 - marketNow)
+              pnl = (marketThen - marketNow) / 100;
+              capital = (100 - marketThen) / 100;
+            } else {
+              // Zero edge: capital still reflects the tradeable side implied by sign
+              // (use YES side so divide-by-zero checks don't fire on 0-edge signals).
+              capital = marketThen / 100;
             }
+            if (capital <= 0) continue;
 
             signals.push({
               event_ticker: m.event_ticker,
@@ -100,7 +149,9 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
               market_now: marketNow,
               resolved: true,
               edge_pp: edgePp,
-              pnl: Math.round(pnl * 100) / 100,
+              pnl: Math.round(pnl * 10000) / 10000,
+              capital: Math.round(capital * 10000) / 10000,
+              edge_bucket: edgeBucketLabel(edgePp),
               confidence_score: snap.confidence_score ?? 0,
               close_time: m.close_time,
             });
@@ -153,27 +204,36 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
       if (historyRow.outcome_probabilities_json) {
         try { outcomes = JSON.parse(historyRow.outcome_probabilities_json); } catch { /* skip */ }
       }
+      // Strict per-contract extraction — no event-level fallback.
       const perMarket = findOutcomeProb(outcomes, m.ticker);
-      const modelProb = perMarket?.modelProb ?? historyRow.model_probability;
-      const marketThen = perMarket?.marketProb ?? historyRow.market_probability;
+      if (!perMarket) continue;
+      const modelProb = perMarket.model_probability;
+      const marketThen = perMarket.market_probability;
+      if (!Number.isFinite(modelProb) || !Number.isFinite(marketThen)) continue;
       const confidenceScore = historyRow.confidence_score ?? report.confidence_score ?? 0;
 
       const marketNow = m.market_prob * 100; // current Kalshi price (0-100)
       const edgePp = Math.round((modelProb - marketThen) * 10) / 10;
 
-      // Tradeable filters: price is marketNow (the current transactable
-      // price for an open position you'd take today). Use lifetime volume
-      // so the same gate works for both resolved and open contracts.
-      if (m.volume < minVolume) continue;
+      // Tradeable filter — per-contract volume from the Octagon snapshot.
+      const vol = contractVolume(perMarket, m.volume);
+      if (vol < minVolume) continue;
+      // Price is marketNow (the current transactable price for an open position).
       if (marketNow < minPrice || marketNow > maxPrice) continue;
 
-      // M2M P&L
+      // M2M P&L and capital per $1 face value.
       let pnl = 0;
+      let capital = 0;
       if (edgePp > 0) {
         pnl = (marketNow - marketThen) / 100;
+        capital = marketThen / 100;
       } else if (edgePp < 0) {
         pnl = (marketThen - marketNow) / 100;
+        capital = (100 - marketThen) / 100;
+      } else {
+        capital = marketThen / 100;
       }
+      if (capital <= 0) continue;
 
       signals.push({
         event_ticker: m.event_ticker,
@@ -184,7 +244,9 @@ export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<Back
         market_now: marketNow,
         resolved: false,
         edge_pp: edgePp,
-        pnl: Math.round(pnl * 100) / 100,
+        pnl: Math.round(pnl * 10000) / 10000,
+        capital: Math.round(capital * 10000) / 10000,
+        edge_bucket: edgeBucketLabel(edgePp),
         confidence_score: confidenceScore,
         close_time: m.close_time,
       });

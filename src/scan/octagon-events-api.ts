@@ -30,6 +30,8 @@ export interface OctagonEventEntry {
     outcome_name?: string;
     model_probability: number;
     market_probability: number;
+    volume?: number | null;
+    volume_24h?: number | null;
   }> | null;
   current_state_summary_richtext?: string;
   short_answer_richtext?: string;

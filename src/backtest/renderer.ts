@@ -2,14 +2,14 @@ import type { BacktestResult, ScoredSignal } from './types.js';
 import { writeFileSync } from 'fs';
 
 export interface FormatOpts {
-  minEdge?: number;          // 0-1 scale, default 0.05
+  minEdge?: number;          // 0-1 scale, default 0.005 (0.5pp)
 }
 
 /**
  * Format complete backtest result for terminal display.
  */
 export function formatBacktestHuman(result: BacktestResult, opts?: FormatOpts): string {
-  const minEdgePp = ((opts?.minEdge ?? 0.05) * 100).toFixed(0);
+  const minEdgePp = ((opts?.minEdge ?? 0.005) * 100).toFixed(1);
   const now = new Date();
   const from = new Date(now.getTime() - result.days * 24 * 60 * 60 * 1000);
   const fromStr = from.toISOString().slice(5, 10).replace('-', '/');
@@ -50,6 +50,7 @@ export function formatBacktestHuman(result: BacktestResult, opts?: FormatOpts): 
   if (result.edge_signals > 0) {
     lines.push(`  Hit rate          ${(result.edge_hit_rate * 100).toFixed(1)}%  [95% CI: ${(result.hit_rate_ci[0] * 100).toFixed(1)}% to ${(result.hit_rate_ci[1] * 100).toFixed(1)}%]`);
     lines.push(`  Flat-bet P&L      ${result.flat_bet_pnl >= 0 ? '+' : ''}$${result.flat_bet_pnl.toFixed(2)} (ROI: ${result.flat_bet_roi >= 0 ? '+' : ''}${(result.flat_bet_roi * 100).toFixed(1)}%)`);
+    lines.push(`  Capital deployed  $${result.total_capital.toFixed(2)}   (capital-weighted ROI)`);
   }
 
   // Resolved detail table
@@ -80,6 +81,7 @@ function formatResolvedTable(signals: ScoredSignal[]): string {
     'Mkt Then'.padStart(9),
     'Outcome'.padStart(10),
     'Edge'.padStart(7),
+    'Bkt'.padStart(7),
     'P&L'.padStart(8),
   ].join('  ');
   lines.push(header);
@@ -94,6 +96,7 @@ function formatResolvedTable(signals: ScoredSignal[]): string {
       `${s.market_then.toFixed(0)}%`.padStart(9),
       outcome.padStart(10),
       `${s.edge_pp >= 0 ? '+' : ''}${s.edge_pp.toFixed(0)}pp`.padStart(7),
+      s.edge_bucket.padStart(7),
       `${s.pnl >= 0 ? '+' : ''}$${s.pnl.toFixed(2)}`.padStart(8),
     ].join('  ');
     lines.push(row);
@@ -116,6 +119,7 @@ function formatUnresolvedTable(signals: ScoredSignal[], minEdgePp: string): stri
     'Mkt Then'.padStart(9),
     'Now'.padStart(6),
     'Edge'.padStart(7),
+    'Bkt'.padStart(7),
     'M2M'.padStart(8),
   ].join('  ');
   lines.push(header);
@@ -129,6 +133,7 @@ function formatUnresolvedTable(signals: ScoredSignal[], minEdgePp: string): stri
       `${s.market_then.toFixed(0)}%`.padStart(9),
       `${s.market_now.toFixed(0)}%`.padStart(6),
       `${s.edge_pp >= 0 ? '+' : ''}${s.edge_pp.toFixed(0)}pp`.padStart(7),
+      s.edge_bucket.padStart(7),
       `${s.pnl >= 0 ? '+' : ''}$${s.pnl.toFixed(2)}`.padStart(8),
     ].join('  ');
     lines.push(row);
@@ -154,21 +159,23 @@ function csvEscape(val: string | number): string {
  */
 export function exportCSV(result: BacktestResult, path: string): void {
   const rows: string[] = [];
-  rows.push('type,ticker,event_ticker,model_prob,market_then,market_now,edge_pp,pnl,resolved,close_time,series_category');
+  rows.push('type,ticker,event_ticker,series_category,edge_bucket,model_prob,market_then,market_now,edge_pp,pnl,capital,resolved,close_time');
 
   for (const s of result.signals) {
     rows.push([
       s.resolved ? 'resolved' : 'unresolved',
       csvEscape(s.market_ticker),
       csvEscape(s.event_ticker),
+      csvEscape(s.series_category),
+      csvEscape(s.edge_bucket),
       s.model_prob.toFixed(1),
       s.market_then.toFixed(1),
       s.market_now.toFixed(1),
       s.edge_pp.toFixed(1),
-      s.pnl.toFixed(2),
+      s.pnl.toFixed(4),
+      s.capital.toFixed(4),
       s.resolved ? '1' : '0',
       csvEscape(s.close_time),
-      csvEscape(s.series_category),
     ].join(','));
   }
 

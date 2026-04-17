@@ -117,7 +117,7 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
         asyncFollowUp: async () => {
           const resp = await handleBacktest(defaultArgs(btArgs));
           if (!resp.ok || !resp.data) return resp.error?.message ?? 'Backtest failed';
-          return formatBacktestHuman(resp.data, { minEdge: btArgs.minEdge ?? 0.05 });
+          return formatBacktestHuman(resp.data, { minEdge: btArgs.minEdge ?? 0.005 });
         },
       };
     }

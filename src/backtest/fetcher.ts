@@ -14,6 +14,10 @@ export interface OutcomeProbability {
   outcome_name?: string;
   model_probability: number;   // percentage 0-100
   market_probability: number;  // percentage 0-100
+  /** Per-contract cumulative volume at snapshot time (nullable for older snapshots). */
+  volume?: number | null;
+  /** Per-contract trailing 24h volume at snapshot time (nullable for older snapshots). */
+  volume_24h?: number | null;
 }
 
 export interface HistorySnapshot {
@@ -212,6 +216,12 @@ export async function fetchAndCacheHistory(
  * If `minDate` is provided, snapshots older than that are rejected — this
  * prevents a 30-day lookback from silently using a 60-day-old prediction
  * when the event has no fresh snapshot within the window.
+ *
+ * Additionally requires each candidate snapshot to carry a finite
+ * `market_probability` and a non-empty `outcome_probabilities` array
+ * (mirrors the Supabase-methodology guard
+ * `market_probability IS NOT NULL AND LENGTH(outcome_probabilities_json) > 2`).
+ *
  * Probabilities in the returned snapshot are percentages (0-100).
  */
 export function selectSnapshotByDate(
@@ -225,6 +235,8 @@ export function selectSnapshotByDate(
   let best: HistorySnapshot | null = null;
   let bestEpoch = -Infinity;
   for (const s of snapshots) {
+    if (!Number.isFinite(s.market_probability)) continue;
+    if (!Array.isArray(s.outcome_probabilities) || s.outcome_probabilities.length === 0) continue;
     const capturedEpoch = new Date(s.captured_at).getTime();
     if (capturedEpoch <= targetEpoch && capturedEpoch >= minEpoch && capturedEpoch > bestEpoch) {
       best = s;

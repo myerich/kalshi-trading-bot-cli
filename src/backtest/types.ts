@@ -3,7 +3,7 @@ export interface BacktestOpts {
   resolvedOnly: boolean;
   unresolvedOnly: boolean;
   category?: string;
-  minEdge: number;            // fractional (0-1 scale), converted to pp by caller (e.g., 0.05 → 5pp)
+  minEdge: number;            // fractional (0-1 scale), converted to pp by caller (e.g., 0.005 → 0.5pp)
   exportPath?: string;
 }
 
@@ -17,7 +17,9 @@ export interface ScoredSignal {
   market_now: number;         // 0-100 (settlement for resolved, current price for unresolved)
   resolved: boolean;
   edge_pp: number;            // model_prob - market_then
-  pnl: number;               // computed P&L for this signal
+  pnl: number;               // computed P&L for this signal ($ per $1 face value)
+  capital: number;           // $ capital deployed per $1 face value: kp/100 for YES edges, (100-kp)/100 for NO edges
+  edge_bucket: string;        // absolute-edge bucket label e.g. "0-5%", "5-10%", ..., "90%+"
   confidence_score: number;
   close_time: string;
 }
@@ -36,7 +38,8 @@ export interface BacktestResult {
   edge_hit_rate: number;
   hit_rate_ci: [number, number];
   flat_bet_pnl: number;
-  flat_bet_roi: number;
+  flat_bet_roi: number;       // capital-weighted: sum(pnl) / sum(capital) across edge signals
+  total_capital: number;      // sum of capital across edge signals (ROI denominator)
   signals: ScoredSignal[];
   subscription_notice?: string;
 }

@@ -96,7 +96,7 @@ Type help for commands, or just ask a question.
 | `--performance` | Include win rate, Sharpe, Brier scores (portfolio) |
 | `--dry-run` | Scan without persisting edges (watch) |
 | `--verbose` | Verbose output |
-| `--min-edge <n>` | Minimum edge threshold |
+| `--min-edge <n>` | Minimum edge threshold in pp (backtest default 0.5) |
 | `--interval <min>` | Scan interval in minutes (watch) |
 | `--live` | Force 15m scan interval (watch) |
 | `--days <n>` | Lookback period in days (backtest, default 30) |
@@ -105,7 +105,7 @@ Type help for commands, or just ask a question.
 | `--unresolved` | Open markets only (backtest) |
 | `--category <cat>` | Filter by category (backtest, search edge) |
 | `--limit <n>` | Max results to show (search edge, default 20) |
-| `--min-volume <n>` | Min lifetime volume for a tradeable contract (backtest, default 1) |
+| `--min-volume <n>` | Min per-contract volume (from Octagon snapshot; falls back to Kalshi lifetime if missing). Backtest default 1. |
 | `--min-price <n>` | Min contract price, 0-100 scale (backtest, default 5) |
 | `--max-price <n>` | Max contract price, 0-100 scale (backtest, default 95) |
 | `--export <path>` | Export per-market CSV (backtest) |
@@ -116,6 +116,12 @@ Does the model find real edge? Look back N days, compare what the model said the
 
 - **Resolved** — scored against Kalshi settlement (YES=100%, NO=0%)
 - **Unresolved** — mark-to-market vs current Kalshi trading price
+
+**Methodology (matches Supabase reference):**
+- Per-contract `mp`/`kp` come from `outcome_probabilities` on each Octagon snapshot — no event-level fallback.
+- Tradeability gate uses per-contract `volume`/`volume_24h` from the snapshot when present; falls back to Kalshi lifetime volume for pre-API-change cached snapshots.
+- `--min-edge` defaults to 0.5pp so the 0-5% edge bucket stays visible; each signal is tagged with an `edge_bucket` label (`0-5%`, `5-10%`, ..., `90%+`).
+- `flat_bet_roi` is capital-weighted: `sum(pnl) / sum(capital)`, where `capital = kp/100` for YES edges and `(100 - kp)/100` for NO edges.
 
 ```bash
 bun start backtest                              # 30-day lookback (default)
