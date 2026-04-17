@@ -59,7 +59,7 @@ export type { FormatOpts };
 
 export async function handleBacktest(args: ParsedArgs): Promise<CLIResponse<BacktestResult>> {
   const db = getDb();
-  const days = args.days ?? 30;
+  const days = args.days ?? 15;
   const maxAgeDays = args.maxAge ?? days;
   // Default 0.5pp matches the Supabase reference methodology — enough to
   // skip near-zero-edge noise without excluding the 0-5% bucket.

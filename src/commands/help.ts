@@ -88,8 +88,8 @@ ${p}cancel <order_id>`,
 
     backtest: `**${p}backtest** — Model accuracy scorecard & edge scanner
 
-${p}backtest                              30-day lookback, both sections (default)
-${p}backtest --days 60                    60-day lookback
+${p}backtest                              15-day lookback, both sections (default)
+${p}backtest --days 30                    30-day lookback
 ${p}backtest --max-age 14                 Reject predictions older than 14 days (default = --days)
 ${p}backtest --resolved                   Resolved markets only
 ${p}backtest --unresolved                 Unresolved markets only

@@ -381,9 +381,9 @@ export async function runCli(options?: { forceSetup?: boolean }) {
     // Analysis
     { name: 'backtest', description: 'Model accuracy scorecard + live edge scanner', getArgumentCompletions: (typed: string): AutocompleteItem[] | null => {
       const opts = [
-        { value: '--days 30', label: '--days 30', description: '30-day lookback (default)' },
+        { value: '--days 15', label: '--days 15', description: '15-day lookback (default)' },
         { value: '--days 7', label: '--days 7', description: '7-day lookback' },
-        { value: '--days 60', label: '--days 60', description: '60-day lookback' },
+        { value: '--days 30', label: '--days 30', description: '30-day lookback' },
         { value: '--resolved', label: '--resolved', description: 'Resolved markets only' },
         { value: '--unresolved', label: '--unresolved', description: 'Unresolved markets only' },
         { value: '--category crypto', label: '--category crypto', description: 'Filter by category' },

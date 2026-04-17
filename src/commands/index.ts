@@ -111,7 +111,7 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
         else if (a === '--max-price') { const v = Number(args[++i]); if (Number.isFinite(v) && v >= 0 && v <= 100) btArgs.maxPrice = v; }
       }
       const mode = btArgs.resolved ? 'resolved markets' : btArgs.unresolved ? 'open markets' : 'resolved + open markets';
-      const daysLabel = btArgs.days ?? 30;
+      const daysLabel = btArgs.days ?? 15;
       return {
         output: `Running ${daysLabel}-day backtest on ${mode}...`,
         asyncFollowUp: async () => {

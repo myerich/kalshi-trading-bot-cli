@@ -99,7 +99,7 @@ Type help for commands, or just ask a question.
 | `--min-edge <n>` | Minimum edge threshold in pp (backtest default 0.5) |
 | `--interval <min>` | Scan interval in minutes (watch) |
 | `--live` | Force 15m scan interval (watch) |
-| `--days <n>` | Lookback period in days (backtest, default 30) |
+| `--days <n>` | Lookback period in days (backtest, default 15) |
 | `--max-age <n>` | Reject predictions older than N days (backtest, default = `--days`) |
 | `--resolved` | Resolved markets only (backtest) |
 | `--unresolved` | Open markets only (backtest) |
@@ -124,8 +124,8 @@ Does the model find real edge? Look back N days, compare what the model said the
 - `flat_bet_roi` is capital-weighted: `sum(pnl) / sum(capital)`, where `capital = kp/100` for YES edges and `(100 - kp)/100` for NO edges.
 
 ```bash
-bun start backtest                              # 30-day lookback (default)
-bun start backtest --days 60                    # 60-day lookback
+bun start backtest                              # 15-day lookback (default)
+bun start backtest --days 30                    # 30-day lookback
 bun start backtest --max-age 14                 # only score predictions <=14d old
 bun start backtest --resolved                   # resolved only
 bun start backtest --unresolved --min-edge 10   # unresolved, 10pp threshold
@@ -135,7 +135,7 @@ bun start backtest --export results.csv         # per-market detail
 ```
 
 ```text
-Octagon Backtest — 30-day lookback (03/15 – 04/14)
+Octagon Backtest — 15-day lookback (04/02 – 04/17)
 ══════════════════════════════════════════════════════════
 
 VERDICT: Model has edge (Skill +12.5% [CI: +4.1%, +20.8%]; ROI +7.8%)

@@ -214,7 +214,7 @@ export async function fetchAndCacheHistory(
  * Select the snapshot closest to a target date (N days ago).
  * Returns the last snapshot captured on or before the target date.
  * If `minDate` is provided, snapshots older than that are rejected — this
- * prevents a 30-day lookback from silently using a 60-day-old prediction
+ * prevents a 15-day lookback from silently using a 30-day-old prediction
  * when the event has no fresh snapshot within the window.
  *
  * Additionally requires each candidate snapshot to carry a finite
