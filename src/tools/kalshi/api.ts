@@ -72,6 +72,15 @@ export function fromDollarString(dollar: string): number {
   return Math.round(parseFloat(dollar) * 100);
 }
 
+/**
+ * Canonical Kalshi `dollar_price` serializer. Accepts cents (may be fractional,
+ * e.g. 56.5 for subpenny) and produces a 4-decimal dollar string the API expects.
+ * Works for any side — Kalshi keys `dollar_price` off the request's `side` field.
+ */
+export function priceCentsToDollarString(priceCents: number): string {
+  return (priceCents / 100).toFixed(4);
+}
+
 export function supportsFractional(market: KalshiMarket): boolean {
   return market.supports_fractional === true || market.tick_size < 1;
 }
