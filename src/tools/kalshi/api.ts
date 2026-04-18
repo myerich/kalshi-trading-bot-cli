@@ -73,16 +73,81 @@ export function fromDollarString(dollar: string): number {
 }
 
 /**
- * Canonical Kalshi `dollar_price` serializer. Accepts cents (may be fractional,
- * e.g. 56.5 for subpenny) and produces a 4-decimal dollar string the API expects.
- * Works for any side — Kalshi keys `dollar_price` off the request's `side` field.
+ * Serialize cents (possibly fractional, e.g. 56.5) as a 4-decimal dollar
+ * string — the format Kalshi accepts in {yes,no}_price_dollars request fields.
  */
 export function priceCentsToDollarString(priceCents: number): string {
   return (priceCents / 100).toFixed(4);
 }
 
+/**
+ * Serialize a contract count as a 2-decimal fixed-point string — the format
+ * Kalshi accepts in count_fp. Kalshi rejects fractional counts on the legacy
+ * integer `count` field, so we always use count_fp.
+ */
+export function countToFpString(count: number): string {
+  return count.toFixed(2);
+}
+
+/**
+ * Whether this market accepts subcent prices (step < 1¢).
+ * Authoritative source: price_level_structure. linear_cent means whole penny only.
+ */
+export function supportsSubcent(market: KalshiMarket): boolean {
+  return market.price_level_structure !== undefined && market.price_level_structure !== 'linear_cent';
+}
+
+/**
+ * Whether this market accepts fractional contract counts.
+ */
 export function supportsFractional(market: KalshiMarket): boolean {
-  return market.supports_fractional === true || market.tick_size < 1;
+  return market.fractional_trading_enabled === true;
+}
+
+/**
+ * Build the price/count fields for a Kalshi order body. Always uses the new
+ * fixed-point fields (count_fp + {side}_price_dollars) — never the legacy
+ * integer `count` or `yes_price`/`no_price`, which reject fractional/subpenny.
+ *
+ * If `market` is supplied, enforces market-level gates:
+ *   - fractional count requires fractional_trading_enabled=true
+ *   - subcent price requires price_level_structure != 'linear_cent'
+ */
+export function buildOrderPriceCount(args: {
+  side: 'yes' | 'no';
+  count: number;
+  priceCents?: number;
+  market?: KalshiMarket;
+}): Record<string, string> {
+  const { side, count, priceCents, market } = args;
+  const out: Record<string, string> = {};
+
+  if (!Number.isFinite(count) || count <= 0) {
+    throw new Error(`Invalid count: ${count}`);
+  }
+  const isFractional = !Number.isInteger(count);
+  if (isFractional && market && !supportsFractional(market)) {
+    throw new Error(
+      `Market ${market.ticker} does not support fractional contracts (fractional_trading_enabled=false). Use whole contract counts.`
+    );
+  }
+  out.count_fp = countToFpString(count);
+
+  if (priceCents !== undefined) {
+    if (!Number.isFinite(priceCents) || priceCents <= 0 || priceCents >= 100) {
+      throw new Error(`Invalid price (cents): ${priceCents}`);
+    }
+    const isSubcent = !Number.isInteger(priceCents);
+    if (isSubcent && market && !supportsSubcent(market)) {
+      throw new Error(
+        `Market ${market.ticker} does not support subcent prices (price_level_structure=linear_cent). Use whole-cent prices.`
+      );
+    }
+    const field = side === 'yes' ? 'yes_price_dollars' : 'no_price_dollars';
+    out[field] = priceCentsToDollarString(priceCents);
+  }
+
+  return out;
 }
 
 // --- Retry logic ---

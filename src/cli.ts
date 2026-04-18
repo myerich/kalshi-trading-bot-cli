@@ -648,27 +648,38 @@ export async function runCli(options?: { forceSetup?: boolean }) {
         // Fetch live prices then show trade prompt
         void (async () => {
           let priceInfo = '';
+          let subcent = false;
+          let fractional = false;
           try {
             const res = await callKalshiApi('GET', `/markets/${ticker}`);
             const mkt = (res.market ?? res) as KalshiMarket;
-            const yesBid = mkt.yes_bid ?? Math.round((parseFloat(mkt.yes_bid_dollars ?? mkt.dollar_yes_bid ?? '0') || 0) * 100);
-            const yesAsk = mkt.yes_ask ?? Math.round((parseFloat(mkt.yes_ask_dollars ?? mkt.dollar_yes_ask ?? '0') || 0) * 100);
-            const noBid = mkt.no_bid ?? (Math.round((parseFloat(mkt.no_bid_dollars ?? mkt.dollar_no_bid ?? '0') || 0) * 100) || (100 - yesAsk));
-            const noAsk = mkt.no_ask ?? (Math.round((parseFloat(mkt.no_ask_dollars ?? mkt.dollar_no_ask ?? '0') || 0) * 100) || (100 - yesBid));
+            subcent = mkt.price_level_structure !== undefined && mkt.price_level_structure !== 'linear_cent';
+            fractional = mkt.fractional_trading_enabled === true;
+            const yesBidCents = (parseFloat(mkt.yes_bid_dollars ?? mkt.dollar_yes_bid ?? '0') || 0) * 100 || (mkt.yes_bid ?? 0);
+            const yesAskCents = (parseFloat(mkt.yes_ask_dollars ?? mkt.dollar_yes_ask ?? '0') || 0) * 100 || (mkt.yes_ask ?? 0);
+            const noBidCents = (parseFloat(mkt.no_bid_dollars ?? mkt.dollar_no_bid ?? '0') || 0) * 100 || (mkt.no_bid ?? (100 - yesAskCents));
+            const noAskCents = (parseFloat(mkt.no_ask_dollars ?? mkt.dollar_no_ask ?? '0') || 0) * 100 || (mkt.no_ask ?? (100 - yesBidCents));
+            const render = (c: number) => subcent ? `$${(c / 100).toFixed(4)}` : `${Math.round(c)}¢`;
             priceInfo = `**Current market prices:**\n` +
-              `  YES: ${yesBid}c bid / ${yesAsk}c ask\n` +
-              `  NO:  ${noBid}c bid / ${noAsk}c ask\n\n`;
+              `  YES: ${render(yesBidCents)} bid / ${render(yesAskCents)} ask\n` +
+              `  NO:  ${render(noBidCents)} bid / ${render(noAskCents)} ask\n\n`;
           } catch {
             // Skip price info on error
           }
+          const exampleLimitPrice = subcent ? '0.5650' : '50';
+          const exampleCount = fractional ? '2.5' : '10';
+          const fractionalHint = fractional ? '  (fractional counts enabled)\n' : '';
+          const subcentHint = subcent ? '  (subpenny prices enabled — use dollars, e.g. 0.5650)\n' : '';
           chatLog.finalizeAnswer(
             `Trade **${ticker}**\n\n` +
             priceInfo +
+            fractionalHint +
+            subcentHint +
             `**Examples** (count = number of contracts):\n` +
-            `  /buy ${ticker} 10        ← buy 10 YES contracts at market price\n` +
-            `  /buy ${ticker} 10 no     ← buy 10 NO contracts at market price\n` +
-            `  /buy ${ticker} 10 50     ← buy 10 YES contracts, limit 50c each\n` +
-            `  /sell ${ticker} 10 no    ← sell 10 NO contracts at market price`);
+            `  /buy ${ticker} ${exampleCount}        ← buy ${exampleCount} YES contracts at market price\n` +
+            `  /buy ${ticker} ${exampleCount} no     ← buy ${exampleCount} NO contracts at market price\n` +
+            `  /buy ${ticker} ${exampleCount} ${exampleLimitPrice}     ← buy ${exampleCount} YES contracts, limit ${exampleLimitPrice}\n` +
+            `  /sell ${ticker} ${exampleCount} no    ← sell ${exampleCount} NO contracts at market price`);
           tui.requestRender();
         })();
         return;

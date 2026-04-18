@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { toDollarString, fromDollarString, priceCentsToDollarString, supportsFractional, KalshiApiError, callKalshiApi } from '../api.js';
+import { toDollarString, fromDollarString, priceCentsToDollarString, countToFpString, supportsFractional, supportsSubcent, buildOrderPriceCount, KalshiApiError, callKalshiApi } from '../api.js';
 import type { KalshiMarket } from '../types.js';
 import { auditTrail } from '../../../audit/index.js';
 import { dlqWriter } from '../dlq.js';
@@ -104,21 +104,96 @@ describe('priceCentsToDollarString (subpenny-aware)', () => {
   });
 });
 
+describe('countToFpString', () => {
+  it('serializes whole and fractional counts with 2 decimals', () => {
+    expect(countToFpString(10)).toBe('10.00');
+    expect(countToFpString(1)).toBe('1.00');
+    expect(countToFpString(2.5)).toBe('2.50');
+    expect(countToFpString(0.01)).toBe('0.01');
+  });
+});
+
+const makeMarket = (overrides: Partial<KalshiMarket>): KalshiMarket =>
+  ({ ticker: 'T', tick_size: 1, ...overrides } as unknown as KalshiMarket);
+
 describe('supportsFractional', () => {
-  const base = (overrides: Partial<KalshiMarket>): KalshiMarket => ({
-    ticker: 'T', tick_size: 1, supports_fractional: false,
-  } as KalshiMarket & typeof overrides) as unknown as KalshiMarket;
-
-  it('returns true when supports_fractional=true', () => {
-    expect(supportsFractional({ ...base({}), supports_fractional: true } as KalshiMarket)).toBe(true);
+  it('returns true when fractional_trading_enabled=true', () => {
+    expect(supportsFractional(makeMarket({ fractional_trading_enabled: true }))).toBe(true);
   });
 
-  it('returns true when tick_size < 1', () => {
-    expect(supportsFractional({ ...base({}), tick_size: 0.01 } as KalshiMarket)).toBe(true);
+  it('returns false otherwise', () => {
+    expect(supportsFractional(makeMarket({ fractional_trading_enabled: false }))).toBe(false);
+    expect(supportsFractional(makeMarket({}))).toBe(false);
+  });
+});
+
+describe('supportsSubcent', () => {
+  it('returns true for deci_cent and tapered_deci_cent', () => {
+    expect(supportsSubcent(makeMarket({ price_level_structure: 'deci_cent' }))).toBe(true);
+    expect(supportsSubcent(makeMarket({ price_level_structure: 'tapered_deci_cent' }))).toBe(true);
   });
 
-  it('returns false for standard markets', () => {
-    expect(supportsFractional({ ...base({}), tick_size: 1, supports_fractional: false } as KalshiMarket)).toBe(false);
+  it('returns false for linear_cent', () => {
+    expect(supportsSubcent(makeMarket({ price_level_structure: 'linear_cent' }))).toBe(false);
+  });
+
+  it('returns false when price_level_structure is missing', () => {
+    expect(supportsSubcent(makeMarket({}))).toBe(false);
+  });
+});
+
+describe('buildOrderPriceCount', () => {
+  const subcentFracMarket = makeMarket({
+    price_level_structure: 'tapered_deci_cent',
+    fractional_trading_enabled: true,
+  });
+  const wholePennyMarket = makeMarket({
+    price_level_structure: 'linear_cent',
+    fractional_trading_enabled: false,
+  });
+
+  it('emits count_fp and {side}_price_dollars for yes side', () => {
+    expect(buildOrderPriceCount({ side: 'yes', count: 10, priceCents: 56, market: wholePennyMarket })).toEqual({
+      count_fp: '10.00',
+      yes_price_dollars: '0.5600',
+    });
+  });
+
+  it('emits no_price_dollars for no side', () => {
+    expect(buildOrderPriceCount({ side: 'no', count: 10, priceCents: 72, market: wholePennyMarket })).toEqual({
+      count_fp: '10.00',
+      no_price_dollars: '0.7200',
+    });
+  });
+
+  it('allows fractional count when market supports it', () => {
+    expect(buildOrderPriceCount({ side: 'yes', count: 2.5, priceCents: 56, market: subcentFracMarket })).toEqual({
+      count_fp: '2.50',
+      yes_price_dollars: '0.5600',
+    });
+  });
+
+  it('rejects fractional count on non-fractional market', () => {
+    expect(() =>
+      buildOrderPriceCount({ side: 'yes', count: 2.5, priceCents: 56, market: wholePennyMarket })
+    ).toThrow(/does not support fractional contracts/);
+  });
+
+  it('allows subcent price when market supports it', () => {
+    expect(buildOrderPriceCount({ side: 'yes', count: 10, priceCents: 56.5, market: subcentFracMarket })).toEqual({
+      count_fp: '10.00',
+      yes_price_dollars: '0.5650',
+    });
+  });
+
+  it('rejects subcent price on linear_cent market', () => {
+    expect(() =>
+      buildOrderPriceCount({ side: 'yes', count: 10, priceCents: 56.5, market: wholePennyMarket })
+    ).toThrow(/does not support subcent prices/);
+  });
+
+  it('omits price field when priceCents undefined', () => {
+    expect(buildOrderPriceCount({ side: 'yes', count: 10 })).toEqual({ count_fp: '10.00' });
   });
 });
 

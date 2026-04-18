@@ -208,8 +208,8 @@ export function buildHelp(ctx: HelpContext, topic?: string): { text: string } | 
  * Shared trade argument validation for both dispatch and slash handlers.
  *
  * Counts: integer (e.g. "10") or decimal (e.g. "10.5") — the latter only works
- * on markets with supports_fractional=true, but we don't gate here since the
- * market isn't loaded at parse time.
+ * on markets with fractional_trading_enabled=true, but we don't gate here
+ * since the market isn't loaded at parse time.
  *
  * Prices: integer input is cents ("56" → 56¢), decimal input is dollars
  * ("0.56" → 56¢, "0.5650" → 56.5¢ subpenny). Returned price is in cents and

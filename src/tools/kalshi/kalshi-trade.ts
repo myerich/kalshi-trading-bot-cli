@@ -31,8 +31,8 @@ Execute trading actions on Kalshi prediction markets. Routes natural language tr
 
 - NEVER call this tool without explicit user confirmation of trade details
 - Always confirm: ticker, side (yes/no), action (buy/sell), count, and price
-- Prices are in cents: $0.56 = 56 cents. Subpenny markets (tick_size < 1) accept fractional cents, e.g. 56.5 = $0.5650
-- Counts are whole numbers by default; fractional counts are allowed only when market.supports_fractional is true
+- Prices are in cents: $0.56 = 56 cents. Subcent markets (price_level_structure != 'linear_cent') accept fractional cents, e.g. 56.5 = $0.5650
+- Counts are whole numbers by default; fractional counts are allowed only when market.fractional_trading_enabled is true
 `.trim();
 
 function buildTradingRouterPrompt(): string {
@@ -43,8 +43,8 @@ Given a trading instruction, call the appropriate trading tool.
 
 ## Key Facts
 - Prices are in cents (1-99): $0.56 → price_cents: 56
-- Subpenny markets (tick_size < 1) accept fractional cents: $0.5650 → price_cents: 56.5
-- count is a whole number by default; fractional counts require market.supports_fractional = true
+- Subcent markets (price_level_structure != 'linear_cent') accept fractional cents: $0.5650 → price_cents: 56.5
+- count is a whole number by default; fractional counts require market.fractional_trading_enabled = true
 - side: "yes" or "no" (the contract type)
 - action: "buy" or "sell"
 - type: "limit" (use price_cents) or "market" (no price needed)

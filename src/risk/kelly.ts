@@ -1,4 +1,4 @@
-import { callKalshiApi, supportsFractional } from "../tools/kalshi/api.js";
+import { callKalshiApi, supportsFractional, supportsSubcent } from "../tools/kalshi/api.js";
 import type {
   KalshiBalance,
   KalshiMarket,
@@ -135,13 +135,13 @@ export async function kellySize(params: KellySizeParams): Promise<KellyResult> {
   const absEdge = Math.abs(executableEdge);
 
   // Entry price from executable quote — computed early so it's available even when sizing is skipped.
-  // Preserve fractional cents (e.g. 56.5¢ = $0.5650) for subpenny markets; round for standard markets.
-  const subpenny = market ? supportsFractional(market) : false;
+  // Preserve fractional cents (e.g. 56.5¢ = $0.5650) for subcent markets; round for whole-penny markets.
+  const subcent = market ? supportsSubcent(market) : false;
   const rawEntryProb = side === 'yes'
     ? (executableProb ?? marketProb)
     : (1 - (executableProb ?? marketProb));
   const rawEntryCents = rawEntryProb * 100;
-  const entryPriceCents = subpenny ? rawEntryCents : Math.round(rawEntryCents);
+  const entryPriceCents = subcent ? rawEntryCents : Math.round(rawEntryCents);
 
   const makeResult = (overrides: Partial<KellyResult> = {}): KellyResult => ({
     side,
@@ -199,10 +199,10 @@ export async function kellySize(params: KellySizeParams): Promise<KellyResult> {
 
   let contracts = 0;
   if (entryPriceCents > 0 && dollarAmountCents > 0) {
-    if (market && supportsFractional(market) && market.tick_size > 0) {
+    // count_fp accepts 2 decimal places → 0.01-contract step on fractional markets.
+    if (market && supportsFractional(market)) {
       const rawContracts = dollarAmountCents / entryPriceCents;
-      contracts =
-        Math.floor(rawContracts / market.tick_size) * market.tick_size;
+      contracts = Math.floor(rawContracts * 100) / 100;
     } else {
       contracts = Math.floor(dollarAmountCents / entryPriceCents);
     }

@@ -45,11 +45,35 @@ function parsePosition(val: string | number | undefined | null): number | undefi
   return isNaN(n) ? undefined : n;
 }
 
-/** Format a dollar amount (already in dollars, not cents) */
+/** Format a dollar amount (already in dollars, not cents) with 2 decimals. */
 function fmtDollars(val: string | number | undefined | null): string {
   const n = parseDollars(val);
   if (n === undefined) return '-';
   return `$${n.toFixed(2)}`;
+}
+
+/**
+ * Format a dollar amount, auto-selecting precision: if the value has non-zero
+ * digits below the cent, render 4 decimals (subpenny); else render 2.
+ */
+function fmtDollarsAuto(val: string | number | undefined | null): string {
+  const n = parseDollars(val);
+  if (n === undefined) return '-';
+  const cents = n * 100;
+  const subcent = Math.abs(cents - Math.round(cents)) > 1e-6;
+  return `$${n.toFixed(subcent ? 4 : 2)}`;
+}
+
+/**
+ * Format a fixed-point contract count (_fp string or number). Renders 2 decimals
+ * if fractional, otherwise as an integer with commas.
+ */
+function fmtCount(val: string | number | undefined | null): string {
+  if (val === undefined || val === null) return '-';
+  const n = typeof val === 'number' ? val : parseFloat(val as string);
+  if (isNaN(n)) return '-';
+  const isFrac = Math.abs(n - Math.round(n)) > 1e-6;
+  return isFrac ? n.toFixed(2) : Math.round(n).toLocaleString();
 }
 
 /** Format a price field that may be integer cents OR a dollars string */
@@ -132,17 +156,22 @@ export function formatPositions(positions: any[]): string {
   if (!positions.length) return 'No open positions.';
 
   const rows = positions.map((p) => {
-    // position_fp is the net position (number of contracts)
     const pos = parsePosition(p.position_fp ?? p.position);
-    const posStr = pos === undefined ? '-' : pos > 0 ? `+${pos}` : String(pos);
-    const pnl = p.realized_pnl_dollars ?? (p.realized_pnl !== undefined ? (p.realized_pnl / 100).toFixed(2) : undefined);
-    const exposure = p.market_exposure_dollars ?? (p.market_exposure !== undefined ? (p.market_exposure / 100).toFixed(2) : undefined);
+    let posStr: string;
+    if (pos === undefined) {
+      posStr = '-';
+    } else {
+      const rendered = fmtCount(pos);
+      posStr = pos > 0 ? `+${rendered}` : rendered === '-' ? '-' : `-${fmtCount(Math.abs(pos))}`;
+    }
+    const pnl = p.realized_pnl_dollars ?? (p.realized_pnl !== undefined ? (p.realized_pnl / 100).toFixed(4) : undefined);
+    const exposure = p.market_exposure_dollars ?? (p.market_exposure !== undefined ? (p.market_exposure / 100).toFixed(4) : undefined);
 
     return [
       p.ticker,
       posStr,
-      fmtDollars(pnl),
-      fmtDollars(exposure),
+      fmtDollarsAuto(pnl),
+      fmtDollarsAuto(exposure),
       String(p.resting_orders_count ?? 0),
     ];
   });
@@ -157,11 +186,13 @@ export function formatOrders(orders: KalshiOrder[]): string {
   if (!orders.length) return 'No orders found.';
 
   const rows = orders.map((o) => {
-    const price = o.yes_price_dollars
-      ? fmtDollars(o.yes_price_dollars)
-      : o.yes_price != null ? fmtCents(o.yes_price) : '-';
-    const remaining = o.remaining_count_fp ?? o.remaining_count ?? '-';
-    const initial = o.initial_count_fp ?? o.contracts_count ?? '-';
+    const priceStr = o.side === 'no' ? o.no_price_dollars : o.yes_price_dollars;
+    const priceCents = o.side === 'no' ? o.no_price : o.yes_price;
+    const price = priceStr
+      ? fmtDollarsAuto(priceStr)
+      : priceCents != null ? fmtCents(priceCents) : '-';
+    const remaining = fmtCount(o.remaining_count_fp ?? o.remaining_count);
+    const initial = fmtCount(o.initial_count_fp ?? o.contracts_count);
     return [
       o.ticker,
       `${o.action}/${o.side}`,
@@ -203,10 +234,17 @@ export function formatMarketDetail(market: any): string {
   if (market.subtitle) lines.push(market.subtitle);
   lines.push('');
   lines.push(`Status:     ${market.status ?? '-'}`);
-  lines.push(`YES Bid:    ${fmtPrice(mktYesBid(market))}   YES Ask: ${fmtPrice(mktYesAsk(market))}`);
-  lines.push(`NO Bid:     ${fmtPrice(mktNoBid(market))}   NO Ask:  ${fmtPrice(mktNoAsk(market))}`);
-  lines.push(`Last Price: ${fmtPrice(mktLastPrice(market))}`);
-  lines.push(`Volume:     ${fmtNum(mktVolume(market))}   Open Interest: ${fmtNum(mktOpenInterest(market))}`);
+
+  // Use subcent-aware formatting when the market supports subpenny pricing.
+  const subcent = market.price_level_structure !== undefined && market.price_level_structure !== 'linear_cent';
+  const fmt = subcent ? fmtDollarsAuto : fmtPrice;
+  lines.push(`YES Bid:    ${fmt(mktYesBid(market))}   YES Ask: ${fmt(mktYesAsk(market))}`);
+  lines.push(`NO Bid:     ${fmt(mktNoBid(market))}   NO Ask:  ${fmt(mktNoAsk(market))}`);
+  lines.push(`Last Price: ${fmt(mktLastPrice(market))}`);
+
+  const volLabel = market.fractional_trading_enabled ? fmtCount(mktVolume(market)) : fmtNum(mktVolume(market));
+  const oiLabel = market.fractional_trading_enabled ? fmtCount(mktOpenInterest(market)) : fmtNum(mktOpenInterest(market));
+  lines.push(`Volume:     ${volLabel}   Open Interest: ${oiLabel}`);
   lines.push(`Closes:     ${fmtDate(market.close_time)}`);
   if (market.result) lines.push(`Result:     ${market.result}`);
   return lines.join('\n');

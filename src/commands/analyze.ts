@@ -7,7 +7,7 @@ import { EdgeComputer } from '../scan/edge-computer.js';
 import { OctagonClient } from '../scan/octagon-client.js';
 import { createOctagonInvoker } from '../scan/invoker.js';
 import * as readline from 'node:readline';
-import { callKalshiApi, KalshiApiError, priceCentsToDollarString, supportsFractional } from '../tools/kalshi/api.js';
+import { callKalshiApi, KalshiApiError, buildOrderPriceCount, supportsSubcent } from '../tools/kalshi/api.js';
 import type { KalshiMarket, KalshiEvent, KalshiOrder, KalshiPosition } from '../tools/kalshi/types.js';
 import { openPosition, closePosition, getOpenPositions } from '../db/positions.js';
 import { logTrade } from '../db/trades.js';
@@ -45,6 +45,7 @@ export interface AnalyzeData {
   rawReport: string;
   existingPosition?: { direction: 'yes' | 'no'; size: number } | null;
   closePriceCents?: number | null;
+  market: KalshiMarket;
 }
 
 
@@ -265,7 +266,7 @@ export async function handleAnalyze(
   const noBid = parsePriceField(market.no_bid_dollars, market.dollar_no_bid, market.no_bid);
   const entryPrice = (snapshot.edge > 0 ? yesAsk : noAsk);
 
-  const priceDecimals = supportsFractional(market) ? 4 : 2;
+  const priceDecimals = supportsSubcent(market) ? 4 : 2;
   let signal: string;
   if (existingPosition) {
     const holdDir = existingPosition.direction.toUpperCase();
@@ -334,9 +335,10 @@ export async function handleAnalyze(
       ? (() => {
           const raw = (existingPosition.direction === 'yes' ? yesBid : noBid) * 100;
           if (!Number.isFinite(raw) || raw <= 0) return null;
-          return supportsFractional(market) ? raw : Math.round(raw);
+          return supportsSubcent(market) ? raw : Math.round(raw);
         })()
       : null,
+    market,
   };
 }
 
@@ -398,9 +400,16 @@ export function formatAnalyzeHuman(data: AnalyzeData): string {
   lines.push(`    Cash Balance: $${(data.kelly.cashBalance / 100).toFixed(2)}`);
   lines.push(`    Open Exposure: $${(data.kelly.openExposure / 100).toFixed(2)}`);
   lines.push(`    Available:    $${(data.kelly.availableBankroll / 100).toFixed(2)}`);
-  lines.push(`    Contracts:    ${data.kelly.contracts}`);
+  const contractsStr = Number.isInteger(data.kelly.contracts)
+    ? String(data.kelly.contracts)
+    : data.kelly.contracts.toFixed(2);
+  const entryCents = data.kelly.entryPriceCents;
+  const entryStr = Number.isInteger(entryCents)
+    ? `${entryCents}¢`
+    : `${entryCents.toFixed(2)}¢ ($${(entryCents / 100).toFixed(4)})`;
+  lines.push(`    Contracts:    ${contractsStr}`);
   lines.push(`    Dollar Amount: $${(data.kelly.dollarAmountCents / 100).toFixed(2)}`);
-  lines.push(`    Entry Price:  ${data.kelly.entryPriceCents}¢`);
+  lines.push(`    Entry Price:  ${entryStr}`);
   lines.push(`    Kelly f*:     ${(data.kelly.fraction * 100).toFixed(1)}%`);
   lines.push(`    Adjusted f:   ${(data.kelly.adjustedFraction * 100).toFixed(1)}%`);
   if (data.kelly.liquidityAdjusted) {
@@ -524,8 +533,12 @@ export async function promptAnalyzeActions(data: AnalyzeData): Promise<void> {
               action: 'sell',
               side: sellSide,
               type: 'limit',
-              count: sellSize,
-              dollar_price: priceCentsToDollarString(closePrice),
+              ...buildOrderPriceCount({
+                side: sellSide,
+                count: sellSize,
+                priceCents: closePrice,
+                market: data.market,
+              }),
             };
 
             const orderRes = await callKalshiApi('POST', '/portfolio/orders', { body: orderPayload });
@@ -598,8 +611,12 @@ export async function promptAnalyzeActions(data: AnalyzeData): Promise<void> {
             action: 'buy',
             side,
             type: 'limit',
-            count: data.kelly.contracts,
-            dollar_price: priceCentsToDollarString(price),
+            ...buildOrderPriceCount({
+              side,
+              count: data.kelly.contracts,
+              priceCents: price,
+              market: data.market,
+            }),
           };
 
           const orderRes = await callKalshiApi('POST', '/portfolio/orders', { body: orderPayload });

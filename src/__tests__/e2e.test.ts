@@ -130,7 +130,8 @@ function setupFetchMock(originalFetch: typeof globalThis.fetch) {
           no_bid: 39,
           no_ask: 45,
           volume_24h: 1000,
-          supports_fractional: false,
+          fractional_trading_enabled: false,
+          price_level_structure: 'linear_cent',
           tick_size: 1,
         },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });

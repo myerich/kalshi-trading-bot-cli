@@ -1,21 +1,31 @@
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
-import { callKalshiApi, priceCentsToDollarString } from './api.js';
+import { callKalshiApi, buildOrderPriceCount } from './api.js';
 import { formatToolResult } from '../types.js';
 
-// Shared schema fragments: accept fractional counts and subpenny prices.
-// Prices are in cents (1-99); fractional values like 56.5 are allowed for
-// subpenny markets (tick_size < 1) and are sent as `dollar_price` strings.
+// Shared schema fragments: counts and prices are validated at the Kalshi layer
+// (market fetch + buildOrderPriceCount) — the schema only enforces positivity.
 const priceCentsSchema = z
   .number()
   .positive()
   .max(99)
-  .describe('Limit price in cents (1-99; fractional like 56.5 allowed for subpenny markets where tick_size<1)');
+  .describe('Limit price in cents (1-99; fractional like 56.5 allowed on subcent markets where price_level_structure != "linear_cent")');
 
 const countSchema = z
   .number()
   .positive()
-  .describe('Number of contracts (whole number; fractional allowed when market.supports_fractional is true)');
+  .describe('Number of contracts (whole number; fractional allowed when market.fractional_trading_enabled is true)');
+
+/**
+ * Fetch a market just to resolve its fractional/subcent capability — order
+ * placement uses this to gate input before submitting to the API.
+ */
+async function fetchMarketForOrder(ticker: string) {
+  const res = await callKalshiApi('GET', `/markets/${ticker}`);
+  const market = (res as { market?: Record<string, unknown> }).market;
+  if (!market) throw new Error(`Market not found: ${ticker}`);
+  return market as unknown as import('./types.js').KalshiMarket;
+}
 
 export const placeOrder = new DynamicStructuredTool({
   name: 'place_order',
@@ -31,16 +41,19 @@ export const placeOrder = new DynamicStructuredTool({
     client_order_id: z.string().optional().describe('Optional client-provided order ID'),
   }),
   func: async (input) => {
+    const market = await fetchMarketForOrder(input.ticker);
     const body: Record<string, unknown> = {
       ticker: input.ticker,
       action: input.action,
       side: input.side,
       type: input.type,
-      count: input.count,
+      ...buildOrderPriceCount({
+        side: input.side,
+        count: input.count,
+        priceCents: input.price_cents,
+        market,
+      }),
     };
-    if (input.price_cents !== undefined) {
-      body.dollar_price = priceCentsToDollarString(input.price_cents);
-    }
     if (input.expiration_ts !== undefined) body.expiration_ts = input.expiration_ts;
     if (input.client_order_id) body.client_order_id = input.client_order_id;
 
@@ -54,15 +67,26 @@ export const amendOrder = new DynamicStructuredTool({
   description: 'Amend an existing resting order.',
   schema: z.object({
     order_id: z.string().describe('Order ID to amend'),
+    ticker: z.string().describe('Market ticker (required to resolve subcent/fractional gates)'),
+    side: z.enum(['yes', 'no']).describe('Side of the original order'),
     count: countSchema.optional(),
     price_cents: priceCentsSchema.optional(),
     expiration_ts: z.number().optional().describe('New expiration timestamp'),
   }),
   func: async (input) => {
+    const market = await fetchMarketForOrder(input.ticker);
     const body: Record<string, unknown> = {};
-    if (input.count !== undefined) body.count = input.count;
-    if (input.price_cents !== undefined) {
-      body.dollar_price = priceCentsToDollarString(input.price_cents);
+    if (input.count !== undefined || input.price_cents !== undefined) {
+      Object.assign(
+        body,
+        buildOrderPriceCount({
+          side: input.side,
+          count: input.count ?? 1,
+          priceCents: input.price_cents,
+          market,
+        })
+      );
+      if (input.count === undefined) delete (body as Record<string, unknown>).count_fp;
     }
     if (input.expiration_ts !== undefined) body.expiration_ts = input.expiration_ts;
 
@@ -114,11 +138,22 @@ export const placeBatchOrders = new DynamicStructuredTool({
       .describe('List of orders to place'),
   }),
   func: async (input) => {
-    const orders = input.orders.map((o) => {
-      const { price_cents, ...rest } = o;
-      if (price_cents === undefined) return rest;
-      return { ...rest, dollar_price: priceCentsToDollarString(price_cents) };
-    });
+    // Dedupe market fetches across the batch.
+    const marketCache = new Map<string, import('./types.js').KalshiMarket>();
+    const orders = await Promise.all(
+      input.orders.map(async (o) => {
+        let market = marketCache.get(o.ticker);
+        if (!market) {
+          market = await fetchMarketForOrder(o.ticker);
+          marketCache.set(o.ticker, market);
+        }
+        const { price_cents, count, ...rest } = o;
+        return {
+          ...rest,
+          ...buildOrderPriceCount({ side: o.side, count, priceCents: price_cents, market }),
+        };
+      })
+    );
     const body = { orders };
     const data = await callKalshiApi('POST', '/portfolio/orders/batched', { body });
     return formatToolResult(data);

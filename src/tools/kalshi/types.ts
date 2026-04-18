@@ -45,14 +45,25 @@ export interface KalshiMarket {
   strike_type: string;
   floor_strike: number;
   cap_strike: number;
-  supports_fractional?: boolean;
-  // New API format (yes_*_dollars)
+  // Fixed-point / subpenny metadata (authoritative — see docs.kalshi.com/getting_started/fixed_point_migration)
+  price_level_structure?: 'linear_cent' | 'deci_cent' | 'tapered_deci_cent';
+  fractional_trading_enabled?: boolean;
+  price_ranges?: Array<{ start: string; end: string; step: string }>;
+  // Dollar-string price fields (current API shape)
   yes_bid_dollars?: string;
   yes_ask_dollars?: string;
   no_bid_dollars?: string;
   no_ask_dollars?: string;
   last_price_dollars?: string;
-  // Legacy API format (dollar_yes_*)
+  previous_price_dollars?: string;
+  previous_yes_bid_dollars?: string;
+  previous_yes_ask_dollars?: string;
+  notional_value_dollars?: string;
+  liquidity_dollars?: string;
+  yes_bid_size_fp?: string;
+  yes_ask_size_fp?: string;
+  open_interest_fp?: string;
+  // Legacy dollar_* aliases (kept for defensive reads — Kalshi may still emit)
   dollar_yes_bid?: string;
   dollar_yes_ask?: string;
   dollar_no_bid?: string;
@@ -177,17 +188,6 @@ export interface KalshiSettlement {
 export interface KalshiExchangeStatus {
   exchange_active: boolean;
   trading_active: boolean;
-}
-
-export interface KalshiDollarOrderRequest {
-  ticker: string;
-  action: "buy" | "sell";
-  side: "yes" | "no";
-  type: "limit" | "market";
-  count: number;
-  dollar_price?: string;
-  expiration_ts?: number;
-  client_order_id?: string;
 }
 
 export interface KalshiExchangeSchedule {

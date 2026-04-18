@@ -222,37 +222,34 @@ describe('Kelly Sizing', () => {
     expect(result.skippedReason).toContain('threshold');
   });
 
-  test('preserves fractional entry price on subpenny markets', async () => {
+  test('preserves fractional entry price on subcent markets', async () => {
     setMockBankroll(100000, 0, []);
 
-    // tick_size < 1 → subpenny; quote at $0.5625 (56.25¢) should not round to 56.
+    // price_level_structure=tapered_deci_cent ⇒ subcent pricing. Quote at $0.5625
+    // (56.25¢) should not round to 56.
     const market = makeMarket({
-      tick_size: 0.01,
-      supports_fractional: true,
+      price_level_structure: 'tapered_deci_cent',
+      fractional_trading_enabled: true,
       yes_bid: 55,
       yes_ask: 57,
       yes_bid_dollars: '0.5550',
       yes_ask_dollars: '0.5625',
     });
 
-    // Lower the min-edge threshold — the executable edge here is only ~3.75%
-    // (bid/ask haircut eats half of raw 10% edge). We just care that entry
-    // price precision is preserved.
     const result = await kellySize({ edge: 0.10, marketProb: 0.50, market, minEdgeThreshold: 0.01 });
 
-    // entryPriceCents should retain fractional precision from the 0.5625 ask
     expect(result.entryPriceCents).toBeCloseTo(56.25, 4);
     expect(Number.isInteger(result.entryPriceCents)).toBe(false);
     expect(result.contracts).toBeGreaterThan(0);
   });
 
-  test('rounds contracts to tick_size on fractional-enabled markets', async () => {
+  test('emits 0.01-step fractional contracts on fractional-enabled markets', async () => {
     setMockBankroll(100000, 0, []);
 
-    // tick_size 0.1 = fractional contracts in 0.1 increments
+    // count_fp accepts 2 decimals → 0.01 step when fractional_trading_enabled=true.
     const market = makeMarket({
-      tick_size: 0.1,
-      supports_fractional: true,
+      price_level_structure: 'linear_cent',
+      fractional_trading_enabled: true,
       yes_bid: 48,
       yes_ask: 50,
       yes_bid_dollars: '0.48',
@@ -261,9 +258,9 @@ describe('Kelly Sizing', () => {
 
     const result = await kellySize({ edge: 0.10, marketProb: 0.50, market, minEdgeThreshold: 0.01 });
 
-    // contracts should be a multiple of tick_size (0.1) — mod check with tolerance
-    const mod = Math.abs((result.contracts / 0.1) - Math.round(result.contracts / 0.1));
-    expect(mod).toBeLessThan(1e-6);
+    // contracts should be a multiple of 0.01 — floor to hundredths
+    const scaled = result.contracts * 100;
+    expect(Math.abs(scaled - Math.round(scaled))).toBeLessThan(1e-6);
   });
 });
 

@@ -5,7 +5,8 @@ import { auditTrail } from '../audit/index.js';
 import { ScanLoop } from '../scan/loop.js';
 import { createOctagonInvoker } from '../scan/invoker.js';
 import { formatScanTable } from './scan-formatters.js';
-import { callKalshiApi } from '../tools/kalshi/api.js';
+import { callKalshiApi, supportsSubcent, supportsFractional } from '../tools/kalshi/api.js';
+import type { KalshiMarket } from '../tools/kalshi/types.js';
 import { getBotSetting } from '../utils/bot-config.js';
 import type { ScanResult } from '../scan/loop.js';
 
@@ -114,7 +115,7 @@ interface TickerSnapshot {
   spread: string;
   volume: string;
   openInterest: string;
-  orderbook: { price: string; quantity: number }[];
+  orderbook: { price: string; quantity: string }[];
   timestamp: string;
 }
 
@@ -125,14 +126,17 @@ function parseDollarField(val: string | number | undefined | null, isCentField =
   return isCentField ? n / 100 : n;
 }
 
-/** Format a value already in dollars (0.00–1.00) */
-function fmtDollars(val: number): string {
-  return `$${val.toFixed(2)}`;
+/** Render a dollar amount, auto-selecting 2 vs 4 decimals based on market subcent support. */
+function fmtPriceDollars(val: number, subcent: boolean): string {
+  return `$${val.toFixed(subcent ? 4 : 2)}`;
 }
 
-/** Format a cent integer (1–99) as dollars */
-function fmtCents(val: number): string {
-  return `$${(val / 100).toFixed(2)}`;
+/** Render a contract count — 2 decimals on fractional markets, whole otherwise. */
+function fmtCount(n: number | string | undefined | null, fractional: boolean): string {
+  if (n === undefined || n === null) return '-';
+  const val = typeof n === 'number' ? n : parseFloat(n as string);
+  if (isNaN(val)) return '-';
+  return fractional ? val.toFixed(2) : Math.round(val).toLocaleString();
 }
 
 function fmtNum(n: number | string | undefined | null): string {
@@ -143,58 +147,66 @@ function fmtNum(n: number | string | undefined | null): string {
 }
 
 async function fetchTickerSnapshot(ticker: string): Promise<TickerSnapshot> {
-  // Fetch market data
-  const market = await callKalshiApi('GET', `/markets/${ticker}`) as any;
-  const m = market.market ?? market;
+  const marketRes = await callKalshiApi('GET', `/markets/${ticker}`) as Record<string, unknown>;
+  const m = ((marketRes.market ?? marketRes) as unknown) as KalshiMarket & Record<string, unknown>;
+  const subcent = supportsSubcent(m);
+  const fractional = supportsFractional(m);
 
   const hasDollarYesAsk = m.yes_ask_dollars != null || m.dollar_yes_ask != null;
   const hasDollarYesBid = m.yes_bid_dollars != null || m.dollar_yes_bid != null;
   const hasDollarNoAsk = m.no_ask_dollars != null || m.dollar_no_ask != null;
   const hasDollarNoBid = m.no_bid_dollars != null || m.dollar_no_bid != null;
-  const yesAsk = parseDollarField(m.yes_ask_dollars ?? m.dollar_yes_ask ?? m.yes_ask, !hasDollarYesAsk);
-  const yesBid = parseDollarField(m.yes_bid_dollars ?? m.dollar_yes_bid ?? m.yes_bid, !hasDollarYesBid);
-  const noAsk = parseDollarField(m.no_ask_dollars ?? m.dollar_no_ask ?? m.no_ask, !hasDollarNoAsk);
-  const noBid = parseDollarField(m.no_bid_dollars ?? m.dollar_no_bid ?? m.no_bid, !hasDollarNoBid);
+  const yesAsk = parseDollarField((m.yes_ask_dollars ?? m.dollar_yes_ask ?? m.yes_ask) as string | number | undefined, !hasDollarYesAsk);
+  const yesBid = parseDollarField((m.yes_bid_dollars ?? m.dollar_yes_bid ?? m.yes_bid) as string | number | undefined, !hasDollarYesBid);
+  const noAsk = parseDollarField((m.no_ask_dollars ?? m.dollar_no_ask ?? m.no_ask) as string | number | undefined, !hasDollarNoAsk);
+  const noBid = parseDollarField((m.no_bid_dollars ?? m.dollar_no_bid ?? m.no_bid) as string | number | undefined, !hasDollarNoBid);
   const spread = yesAsk - yesBid;
 
-  // Fetch orderbook
+  // Orderbook: current shape is orderbook_fp.{yes,no}_dollars = [[price_str, qty_str], ...]
   let orderbook: { price: string; quantity: number }[] = [];
   try {
-    const ob = await callKalshiApi('GET', `/markets/${ticker}/orderbook`) as any;
-    const book = ob.orderbook ?? ob;
-    const rawEntries = Array.isArray(book.yes) ? book.yes : [];
-    orderbook = rawEntries
-      .filter((entry: unknown): entry is [number, number] =>
-        Array.isArray(entry) && entry.length === 2 &&
-        typeof entry[0] === 'number' && typeof entry[1] === 'number'
-      )
-      .slice(0, 5)
-      .map(([price, qty]: [number, number]) => ({
-        price: fmtCents(price),
-        quantity: qty,
-      }));
+    const ob = await callKalshiApi('GET', `/markets/${ticker}/orderbook`) as Record<string, unknown>;
+    const book = (ob.orderbook_fp ?? ob.orderbook ?? ob) as Record<string, unknown>;
+    const rawEntries = (book.yes_dollars ?? book.yes) as unknown[];
+    if (Array.isArray(rawEntries)) {
+      orderbook = rawEntries
+        .map((entry): { price: string; quantity: number } | null => {
+          if (!Array.isArray(entry) || entry.length !== 2) return null;
+          const [priceRaw, qtyRaw] = entry;
+          const priceDollars = typeof priceRaw === 'string' ? parseFloat(priceRaw) : Number(priceRaw);
+          // Integer entries from legacy responses are cents; strings are dollars already.
+          const priceVal = typeof priceRaw === 'number' ? priceDollars / 100 : priceDollars;
+          const qty = typeof qtyRaw === 'string' ? parseFloat(qtyRaw) : Number(qtyRaw);
+          if (!Number.isFinite(priceVal) || !Number.isFinite(qty)) return null;
+          return { price: fmtPriceDollars(priceVal, subcent), quantity: qty };
+        })
+        .filter((x): x is { price: string; quantity: number } => x !== null)
+        .slice(0, 5);
+    }
   } catch {
     // Orderbook not available for all markets
   }
 
-  // Resolve last price — dollar string fields are already in dollars; last_price is cents
   const dollarLastStr = m.last_price_dollars ?? m.dollar_last_price;
-  const parsedDollarLast = dollarLastStr != null ? parseFloat(dollarLastStr) : NaN;
+  const parsedDollarLast = dollarLastStr != null ? parseFloat(dollarLastStr as string) : NaN;
   const lastPriceDollars = Number.isFinite(parsedDollarLast)
     ? parsedDollarLast
-    : (m.last_price != null ? m.last_price / 100 : NaN);
+    : (m.last_price != null ? (m.last_price as number) / 100 : NaN);
 
   return {
     ticker,
-    lastPrice: Number.isFinite(lastPriceDollars) ? fmtDollars(lastPriceDollars) : '-',
-    yesAsk: fmtDollars(yesAsk),
-    yesBid: fmtDollars(yesBid),
-    noAsk: fmtDollars(noAsk),
-    noBid: fmtDollars(noBid),
-    spread: `$${spread.toFixed(4)}`,
-    volume: fmtNum(m.volume_fp ?? m.volume),
-    openInterest: fmtNum(m.open_interest_fp ?? m.open_interest),
-    orderbook,
+    lastPrice: Number.isFinite(lastPriceDollars) ? fmtPriceDollars(lastPriceDollars, subcent) : '-',
+    yesAsk: fmtPriceDollars(yesAsk, subcent),
+    yesBid: fmtPriceDollars(yesBid, subcent),
+    noAsk: fmtPriceDollars(noAsk, subcent),
+    noBid: fmtPriceDollars(noBid, subcent),
+    spread: `$${spread.toFixed(subcent ? 4 : 2)}`,
+    volume: fmtCount(m.volume_fp ?? m.volume, fractional),
+    openInterest: fmtCount(m.open_interest_fp ?? m.open_interest, fractional),
+    orderbook: orderbook.map((l) => ({
+      price: l.price,
+      quantity: fractional ? l.quantity.toFixed(2) : Math.round(l.quantity).toLocaleString(),
+    })),
     timestamp: new Date().toISOString(),
   };
 }

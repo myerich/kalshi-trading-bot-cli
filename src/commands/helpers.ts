@@ -1,52 +1,51 @@
-import { callKalshiApi } from '../tools/kalshi/api.js';
+import { callKalshiApi, supportsSubcent } from '../tools/kalshi/api.js';
+import type { KalshiMarket } from '../tools/kalshi/types.js';
 
 /**
- * Parse a market quote from API response, handling both cent and dollar-string fields.
- * Returns a fractional cent value (e.g. 56.5 for $0.5650) or NaN if no valid quote.
- * Caller decides whether to round based on the market's tick_size / supports_fractional.
+ * Parse a market quote from API response. Returns a fractional cent value
+ * (e.g. 56.5 for $0.5650) or NaN if no valid quote.
  */
 function parseQuoteCents(market: Record<string, unknown>, field: 'yes_ask' | 'yes_bid' | 'no_ask' | 'no_bid'): number {
-  // Prefer dollar-string fields for full precision (subpenny support).
-  const dollarKey = `${field}_dollars`;      // e.g. yes_ask_dollars
-  const legacyDollarKey = `dollar_${field}`;  // e.g. dollar_yes_ask
-
-  const dollarStr = market[dollarKey] as string | undefined;
-  const legacyStr = market[legacyDollarKey] as string | undefined;
+  const dollarStr = market[`${field}_dollars`] as string | undefined;
+  const legacyStr = market[`dollar_${field}`] as string | undefined;
 
   const d = dollarStr != null ? parseFloat(dollarStr) : legacyStr != null ? parseFloat(legacyStr) : NaN;
   if (Number.isFinite(d) && d > 0) return d * 100;
 
-  // Fall back to cent field (integer)
   const cents = Number(market[field] ?? 0);
   if (Number.isFinite(cents) && cents > 0) return cents;
 
   return NaN;
 }
 
+export async function fetchMarket(ticker: string): Promise<KalshiMarket> {
+  const res = await callKalshiApi('GET', `/markets/${ticker}`);
+  const market = (res as { market?: unknown }).market ?? res;
+  return market as KalshiMarket;
+}
+
 /**
- * Fetch the best available quote for a market order.
- * Returns fractional cents (e.g. 56.5 for subpenny markets) or an error.
+ * Fetch the best available quote for a market order, alongside the market
+ * object so callers can reuse it for order validation (no extra API round-trip).
+ * Returns fractional cents when the market supports subcent pricing, else snaps
+ * to whole cents.
  */
 export async function fetchMarketQuote(
   ticker: string,
   action: 'buy' | 'sell',
   side: 'yes' | 'no' = 'yes',
-): Promise<{ cents: number } | { error: string }> {
-  const marketData = await callKalshiApi('GET', `/markets/${ticker}`) as Record<string, unknown>;
-  const market = (marketData.market ?? marketData) as Record<string, unknown>;
+): Promise<{ cents: number; market: KalshiMarket } | { error: string }> {
+  const market = await fetchMarket(ticker);
 
   const field = side === 'no'
     ? (action === 'sell' ? 'no_bid' : 'no_ask')
     : (action === 'sell' ? 'yes_bid' : 'yes_ask');
-  const cents = parseQuoteCents(market, field);
+  const cents = parseQuoteCents(market as unknown as Record<string, unknown>, field);
 
   if (!Number.isFinite(cents) || cents <= 0) {
     const label = action === 'sell' ? 'bid' : 'ask';
     return { error: `No ${label} available for ${ticker} — cannot place market order. Specify a price.` };
   }
 
-  // Round to integer cents unless the market supports subpenny pricing.
-  const tickSize = Number(market.tick_size ?? 1);
-  const supportsSubpenny = tickSize > 0 && tickSize < 1;
-  return { cents: supportsSubpenny ? cents : Math.round(cents) };
+  return { cents: supportsSubcent(market) ? cents : Math.round(cents), market };
 }

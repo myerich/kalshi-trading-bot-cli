@@ -1,4 +1,4 @@
-import { callKalshiApi, priceCentsToDollarString } from '../tools/kalshi/api.js';
+import { callKalshiApi, buildOrderPriceCount } from '../tools/kalshi/api.js';
 import type { KalshiOrder, KalshiPosition } from '../tools/kalshi/types.js';
 import type { KalshiBalanceResponse } from './formatters.js';
 import {
@@ -13,7 +13,7 @@ import { handleAnalyze, formatAnalyzeHuman } from './analyze.js';
 import { handlePortfolio, formatPortfolioHuman } from './portfolio.js';
 import { reviewPortfolio, formatReviewHuman } from './review.js';
 import { buildHelp, validateTradeArgs } from './help.js';
-import { fetchMarketQuote } from './helpers.js';
+import { fetchMarket, fetchMarketQuote } from './helpers.js';
 
 export interface CommandResult {
   output: string;
@@ -89,19 +89,26 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
 
 export async function executePendingTrade(trade: NonNullable<CommandResult['pendingTrade']>): Promise<string> {
   let effectivePrice = trade.price;
-  // When no price given, fetch best quote to simulate a market order
+  let market;
   if (effectivePrice === undefined) {
     const quoteResult = await fetchMarketQuote(trade.ticker, trade.action, trade.side);
     if ('error' in quoteResult) return quoteResult.error;
     effectivePrice = quoteResult.cents;
+    market = quoteResult.market;
+  } else {
+    market = await fetchMarket(trade.ticker);
   }
   const body: Record<string, unknown> = {
     ticker: trade.ticker,
     action: trade.action,
     side: trade.side,
     type: 'limit',
-    count: trade.count,
-    dollar_price: priceCentsToDollarString(effectivePrice),
+    ...buildOrderPriceCount({
+      side: trade.side,
+      count: trade.count,
+      priceCents: effectivePrice,
+      market,
+    }),
   };
 
   const data = await callKalshiApi('POST', '/portfolio/orders', { body });

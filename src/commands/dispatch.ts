@@ -10,7 +10,7 @@ import { handleAlerts, formatAlertsHuman } from './alerts.js';
 import { handleStatus } from './status.js';
 import { handleThemes, formatThemesHuman } from './themes.js';
 import { handleWatch } from './watch.js';
-import { callKalshiApi, priceCentsToDollarString } from '../tools/kalshi/api.js';
+import { callKalshiApi, buildOrderPriceCount } from '../tools/kalshi/api.js';
 import {
   formatBalance,
   formatPositions,
@@ -18,7 +18,7 @@ import {
 } from './formatters.js';
 import type { KalshiOrder, KalshiPosition } from '../tools/kalshi/types.js';
 import { buildHelp, validateTradeArgs } from './help.js';
-import { fetchMarketQuote } from './helpers.js';
+import { fetchMarket, fetchMarketQuote } from './helpers.js';
 import { ensureIndex, forceRefreshIndex } from '../tools/kalshi/search-index.js';
 import { searchEventIndex } from '../db/event-index.js';
 import type { KalshiBalanceResponse } from './formatters.js';
@@ -258,11 +258,13 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
         return;
       }
       let effectivePrice = validated.price;
-      // When no price given, fetch best quote to simulate a market order
-      // (Kalshi API requires a price field even for market-like orders)
       const tradeSide = args.side ?? 'yes';
+      const tickerUpper = ticker.toUpperCase();
+
+      // Fetch market once — used both for quote (if needed) and order validation.
+      let market;
       if (effectivePrice === undefined) {
-        const quoteResult = await fetchMarketQuote(ticker.toUpperCase(), subcommand as 'buy' | 'sell', tradeSide);
+        const quoteResult = await fetchMarketQuote(tickerUpper, subcommand as 'buy' | 'sell', tradeSide);
         if ('error' in quoteResult) {
           if (json) {
             console.log(JSON.stringify(wrapError(subcommand, 'NO_QUOTE', quoteResult.error)));
@@ -274,14 +276,22 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
           return;
         }
         effectivePrice = quoteResult.cents;
+        market = quoteResult.market;
+      } else {
+        market = await fetchMarket(tickerUpper);
       }
+
       const body: Record<string, unknown> = {
-        ticker: ticker.toUpperCase(),
+        ticker: tickerUpper,
         action: subcommand,
         side: tradeSide,
         type: 'limit',
-        count: validated.count,
-        dollar_price: priceCentsToDollarString(effectivePrice),
+        ...buildOrderPriceCount({
+          side: tradeSide,
+          count: validated.count,
+          priceCents: effectivePrice,
+          market,
+        }),
       };
       const data = await callKalshiApi('POST', '/portfolio/orders', { body });
       if (json) {
