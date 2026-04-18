@@ -109,6 +109,7 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
         else if (a === '--min-volume') { const v = Number(args[++i]); if (Number.isFinite(v) && v >= 0) btArgs.minVolume = v; }
         else if (a === '--min-price') { const v = Number(args[++i]); if (Number.isFinite(v) && v >= 0 && v <= 100) btArgs.minPrice = v; }
         else if (a === '--max-price') { const v = Number(args[++i]); if (Number.isFinite(v) && v >= 0 && v <= 100) btArgs.maxPrice = v; }
+        else if (a === '--export') { const v = args[++i]; if (v) btArgs.exportPath = v; }
       }
       const mode = btArgs.resolved ? 'resolved markets' : btArgs.unresolved ? 'open markets' : 'resolved + open markets';
       const daysLabel = btArgs.days ?? 15;
@@ -117,7 +118,10 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
         asyncFollowUp: async () => {
           const resp = await handleBacktest(defaultArgs(btArgs));
           if (!resp.ok || !resp.data) return resp.error?.message ?? 'Backtest failed';
-          return formatBacktestHuman(resp.data, { minEdge: btArgs.minEdge ?? 0.005 });
+          const text = formatBacktestHuman(resp.data, { minEdge: btArgs.minEdge ?? 0.005 });
+          return btArgs.exportPath
+            ? `${text}\n\nExported per-market detail to ${btArgs.exportPath}`
+            : text;
         },
       };
     }

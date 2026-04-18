@@ -42,10 +42,11 @@ export function formatBacktestHuman(result: BacktestResult, opts?: FormatOpts): 
   lines.push(`  Events         ${result.events_scored}`);
   lines.push(`  Markets        ${result.markets_resolved + result.markets_unresolved}   (${result.markets_resolved} resolved, ${result.markets_unresolved} unresolved)`);
   lines.push('');
-  lines.push(`  Brier (Octagon)   ${result.brier_octagon.toFixed(3)}`);
-  lines.push(`  Brier (Market)    ${result.brier_market.toFixed(3)}`);
-  lines.push(`  Skill Score       ${result.skill_score >= 0 ? '+' : ''}${(result.skill_score * 100).toFixed(1)}%  [95% CI: ${(result.skill_ci[0] * 100).toFixed(1)}% to ${(result.skill_ci[1] * 100).toFixed(1)}%]`);
-  lines.push('');
+  // Brier scores and Skill Score are hidden for now (keep values in result for JSON/CSV consumers).
+  // lines.push(`  Brier (Octagon)   ${result.brier_octagon.toFixed(3)}`);
+  // lines.push(`  Brier (Market)    ${result.brier_market.toFixed(3)}`);
+  // lines.push(`  Skill Score       ${result.skill_score >= 0 ? '+' : ''}${(result.skill_score * 100).toFixed(1)}%  [95% CI: ${(result.skill_ci[0] * 100).toFixed(1)}% to ${(result.skill_ci[1] * 100).toFixed(1)}%]`);
+  // lines.push('');
   lines.push(`  Edge signals      ${result.edge_signals}   (min edge: ${minEdgePp}pp)`);
   if (result.edge_signals > 0) {
     lines.push(`  Hit rate          ${(result.edge_hit_rate * 100).toFixed(1)}%  [95% CI: ${(result.hit_rate_ci[0] * 100).toFixed(1)}% to ${(result.hit_rate_ci[1] * 100).toFixed(1)}%]`);
@@ -83,6 +84,7 @@ function formatResolvedTable(signals: ScoredSignal[]): string {
     'Edge'.padStart(7),
     'Bkt'.padStart(7),
     'P&L'.padStart(8),
+    'ROI'.padStart(8),
   ].join('  ');
   lines.push(header);
 
@@ -90,6 +92,10 @@ function formatResolvedTable(signals: ScoredSignal[]): string {
   const sorted = [...signals].sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
   for (const s of sorted.slice(0, 20)) {
     const outcome = s.market_now === 100 ? 'YES 100%' : 'NO  0%';
+    const roi = s.capital > 0 ? (s.pnl / s.capital) * 100 : 0;
+    const roiStr = s.capital > 0
+      ? `${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%`
+      : '—';
     const row = '  ' + [
       s.market_ticker.padEnd(30),
       `${s.model_prob.toFixed(0)}%`.padStart(6),
@@ -98,6 +104,7 @@ function formatResolvedTable(signals: ScoredSignal[]): string {
       `${s.edge_pp >= 0 ? '+' : ''}${s.edge_pp.toFixed(0)}pp`.padStart(7),
       s.edge_bucket.padStart(7),
       `${s.pnl >= 0 ? '+' : ''}$${s.pnl.toFixed(2)}`.padStart(8),
+      roiStr.padStart(8),
     ].join('  ');
     lines.push(row);
   }
@@ -121,12 +128,17 @@ function formatUnresolvedTable(signals: ScoredSignal[], minEdgePp: string): stri
     'Edge'.padStart(7),
     'Bkt'.padStart(7),
     'M2M'.padStart(8),
+    'ROI'.padStart(8),
   ].join('  ');
   lines.push(header);
 
   // Sort by |edge| descending
   const sorted = [...signals].sort((a, b) => Math.abs(b.edge_pp) - Math.abs(a.edge_pp));
   for (const s of sorted.slice(0, 20)) {
+    const roi = s.capital > 0 ? (s.pnl / s.capital) * 100 : 0;
+    const roiStr = s.capital > 0
+      ? `${roi >= 0 ? '+' : ''}${roi.toFixed(1)}%`
+      : '—';
     const row = '  ' + [
       s.market_ticker.padEnd(30),
       `${s.model_prob.toFixed(0)}%`.padStart(6),
@@ -135,6 +147,7 @@ function formatUnresolvedTable(signals: ScoredSignal[], minEdgePp: string): stri
       `${s.edge_pp >= 0 ? '+' : ''}${s.edge_pp.toFixed(0)}pp`.padStart(7),
       s.edge_bucket.padStart(7),
       `${s.pnl >= 0 ? '+' : ''}$${s.pnl.toFixed(2)}`.padStart(8),
+      roiStr.padStart(8),
     ].join('  ');
     lines.push(row);
   }
