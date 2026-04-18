@@ -59,22 +59,29 @@ Theme mode runs recurring Octagon scans and displays an edge table.`}`,
 
     buy: `**${p}buy** — Buy contracts
 
-${p}buy <ticker> <count> [price${ctx === 'cli' ? '_in_cents' : ''}] [yes|no]${ctx === 'slash' ? '   Buy contracts (price in cents)' : ''}
+${p}buy <ticker> <count> [price] [yes|no]${ctx === 'slash' ? '   Buy contracts' : ''}
+
+Price accepts cents (1-99, e.g. 56) or dollars (0.01-0.99, e.g. 0.56).
+Subpenny markets accept fractional dollars (e.g. 0.5650 = $0.5650).
+Counts are whole numbers; fractional counts (e.g. 2.5) require a fractional market.
 
 Example${ctx === 'cli' ? 's' : ''}:
   ${p}buy KXBTC-26MAR14-T50049 10 ${ctx === 'cli' ? '          Buy at best ask (10 YES contracts)' : '56'}
-  ${p}buy KXBTC-26MAR14-T50049 10 ${ctx === 'cli' ? '56        Limit order at $0.56' : '56 no   Buy NO contracts'}
-${ctx === 'cli' ? `  ${p}buy KXBTC-26MAR14-T50049 10 56 no   Limit order for NO contracts at $0.56` : ''}
+  ${p}buy KXBTC-26MAR14-T50049 10 ${ctx === 'cli' ? '56        Limit at $0.56 (56¢)' : '0.5650 no   Subpenny NO buy'}
+${ctx === 'cli' ? `  ${p}buy KXBTC-26MAR14-T50049 10 0.5650 no  Subpenny limit for NO at $0.5650` : ''}
 Side defaults to YES if omitted.`,
 
     sell: `**${p}sell** — Sell contracts
 
-${p}sell <ticker> <count> [price${ctx === 'cli' ? '_in_cents' : ''}] [yes|no]${ctx === 'slash' ? '  Sell contracts (price in cents)' : ''}
+${p}sell <ticker> <count> [price] [yes|no]${ctx === 'slash' ? '  Sell contracts' : ''}
+
+Price accepts cents (1-99, e.g. 72) or dollars (0.01-0.99, e.g. 0.72).
+Subpenny markets accept fractional dollars (e.g. 0.7225).
 
 Example${ctx === 'cli' ? 's' : ''}:
-  ${p}sell KXBTC-26MAR14-T50049 10 ${ctx === 'cli' ? '         Sell at best ask (10 YES contracts)' : '72'}
-  ${p}sell KXBTC-26MAR14-T50049 10 ${ctx === 'cli' ? '72       Limit order at $0.72' : '72 no   Sell NO contracts'}
-${ctx === 'cli' ? `  ${p}sell KXBTC-26MAR14-T50049 10 72 no  Limit order for NO contracts at $0.72` : ''}
+  ${p}sell KXBTC-26MAR14-T50049 10 ${ctx === 'cli' ? '         Sell at best bid (10 YES contracts)' : '72'}
+  ${p}sell KXBTC-26MAR14-T50049 10 ${ctx === 'cli' ? '72       Limit at $0.72' : '0.7225 no   Subpenny NO sell'}
+${ctx === 'cli' ? `  ${p}sell KXBTC-26MAR14-T50049 10 0.7225 no  Subpenny NO sell at $0.7225` : ''}
 Side defaults to YES if omitted.`,
 
     cancel: `**${p}cancel** — Cancel a resting order
@@ -121,7 +128,7 @@ Discovery:
 Analysis & Trading:
   analyze <ticker>              Full report: edge, drivers, Kelly sizing
   analyze <ticker> --refresh    Force fresh Octagon report
-  buy <ticker> <n> [price] [yes|no]   Buy contracts (price in cents)
+  buy <ticker> <n> [price] [yes|no]   Buy contracts (price: cents 1-99 or dollars 0.01-0.99)
   sell <ticker> <n> [price] [yes|no]  Sell contracts
   cancel <order_id>                   Cancel a resting order
 
@@ -159,7 +166,7 @@ Discovery:
 Analysis & Trading:
   /analyze <ticker>              Full report: edge, drivers, Kelly sizing
   /analyze <ticker> refresh      Force fresh Octagon report
-  /buy <ticker> <n> [price] [yes|no]   Buy contracts (price in cents)
+  /buy <ticker> <n> [price] [yes|no]   Buy contracts (price: cents 1-99 or dollars 0.01-0.99)
   /sell <ticker> <n> [price] [yes|no]  Sell contracts
   /review                              Review positions for close signals
   /cancel <order_id>                   Cancel a resting order
@@ -197,29 +204,46 @@ export function buildHelp(ctx: HelpContext, topic?: string): { text: string } | 
   return { text: buildOverview(ctx) };
 }
 
-/** Shared trade argument validation for both dispatch and slash handlers. */
+/**
+ * Shared trade argument validation for both dispatch and slash handlers.
+ *
+ * Counts: integer (e.g. "10") or decimal (e.g. "10.5") — the latter only works
+ * on markets with supports_fractional=true, but we don't gate here since the
+ * market isn't loaded at parse time.
+ *
+ * Prices: integer input is cents ("56" → 56¢), decimal input is dollars
+ * ("0.56" → 56¢, "0.5650" → 56.5¢ subpenny). Returned price is in cents and
+ * may be fractional for subpenny quotes.
+ */
 export function validateTradeArgs(
   countStr: string,
   priceStr?: string,
 ): { count: number; price: number | undefined } | { error: string } {
-  if (!/^\d+$/.test(countStr)) {
+  if (!/^\d+(\.\d+)?$/.test(countStr)) {
     return { error: `Invalid count: ${countStr}` };
   }
   const count = Number(countStr);
-  if (count <= 0) {
+  if (!Number.isFinite(count) || count <= 0) {
     return { error: `Invalid count: ${countStr}` };
   }
 
-  let price: number | undefined;
-  if (priceStr !== undefined) {
-    if (!/^\d+$/.test(priceStr)) {
-      return { error: `Invalid price: ${priceStr}. Price must be 1-99 (cents).` };
+  if (priceStr === undefined) return { count, price: undefined };
+
+  if (/^\d+$/.test(priceStr)) {
+    const cents = Number(priceStr);
+    if (cents < 1 || cents > 99) {
+      return { error: `Invalid price: ${priceStr}. Use 1-99 (cents) or 0.01-0.99 (dollars, e.g. 0.56 or 0.5650).` };
     }
-    price = Number(priceStr);
-    if (price < 1 || price > 99) {
-      return { error: `Invalid price: ${priceStr}. Price must be 1-99 (cents).` };
-    }
+    return { count, price: cents };
   }
 
-  return { count, price };
+  if (/^\d*\.\d+$/.test(priceStr)) {
+    const dollars = Number(priceStr);
+    if (!Number.isFinite(dollars) || dollars <= 0 || dollars >= 1) {
+      return { error: `Invalid price: ${priceStr}. Dollar prices must be between 0.0001 and 0.9999 (e.g. 0.56 or 0.5650).` };
+    }
+    return { count, price: dollars * 100 };
+  }
+
+  return { error: `Invalid price: ${priceStr}. Use 1-99 (cents) or 0.01-0.99 (dollars, e.g. 0.56 or 0.5650).` };
 }

@@ -2,10 +2,11 @@ import { callKalshiApi } from '../tools/kalshi/api.js';
 
 /**
  * Parse a market quote from API response, handling both cent and dollar-string fields.
- * Returns cents (1-99) or NaN if no valid quote found.
+ * Returns a fractional cent value (e.g. 56.5 for $0.5650) or NaN if no valid quote.
+ * Caller decides whether to round based on the market's tick_size / supports_fractional.
  */
 function parseQuoteCents(market: Record<string, unknown>, field: 'yes_ask' | 'yes_bid' | 'no_ask' | 'no_bid'): number {
-  // Try dollar-string fields first (new API: yes_ask_dollars, legacy: dollar_yes_ask)
+  // Prefer dollar-string fields for full precision (subpenny support).
   const dollarKey = `${field}_dollars`;      // e.g. yes_ask_dollars
   const legacyDollarKey = `dollar_${field}`;  // e.g. dollar_yes_ask
 
@@ -13,9 +14,9 @@ function parseQuoteCents(market: Record<string, unknown>, field: 'yes_ask' | 'ye
   const legacyStr = market[legacyDollarKey] as string | undefined;
 
   const d = dollarStr != null ? parseFloat(dollarStr) : legacyStr != null ? parseFloat(legacyStr) : NaN;
-  if (Number.isFinite(d) && d > 0) return Math.round(d * 100);
+  if (Number.isFinite(d) && d > 0) return d * 100;
 
-  // Fall back to cent field
+  // Fall back to cent field (integer)
   const cents = Number(market[field] ?? 0);
   if (Number.isFinite(cents) && cents > 0) return cents;
 
@@ -24,7 +25,7 @@ function parseQuoteCents(market: Record<string, unknown>, field: 'yes_ask' | 'ye
 
 /**
  * Fetch the best available quote for a market order.
- * Returns cents for the appropriate side/action, or an error message.
+ * Returns fractional cents (e.g. 56.5 for subpenny markets) or an error.
  */
 export async function fetchMarketQuote(
   ticker: string,
@@ -44,5 +45,8 @@ export async function fetchMarketQuote(
     return { error: `No ${label} available for ${ticker} — cannot place market order. Specify a price.` };
   }
 
-  return { cents };
+  // Round to integer cents unless the market supports subpenny pricing.
+  const tickSize = Number(market.tick_size ?? 1);
+  const supportsSubpenny = tickSize > 0 && tickSize < 1;
+  return { cents: supportsSubpenny ? cents : Math.round(cents) };
 }

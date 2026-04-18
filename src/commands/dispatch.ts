@@ -10,7 +10,7 @@ import { handleAlerts, formatAlertsHuman } from './alerts.js';
 import { handleStatus } from './status.js';
 import { handleThemes, formatThemesHuman } from './themes.js';
 import { handleWatch } from './watch.js';
-import { callKalshiApi } from '../tools/kalshi/api.js';
+import { callKalshiApi, priceCentsToDollarString } from '../tools/kalshi/api.js';
 import {
   formatBalance,
   formatPositions,
@@ -23,7 +23,6 @@ import { ensureIndex, forceRefreshIndex } from '../tools/kalshi/search-index.js'
 import { searchEventIndex } from '../db/event-index.js';
 import type { KalshiBalanceResponse } from './formatters.js';
 import { ExitCode, exitCodeFromError } from '../utils/errors.js';
-import { trackEvent } from '../utils/telemetry.js';
 
 // ─── Alias resolution ────────────────────────────────────────────────────────
 // Maps legacy CLI subcommands to canonical commands with mode/subview context
@@ -55,7 +54,6 @@ function resolveAlias(subcommand: Subcommand, positionalArgs: string[]): Resolve
 export async function dispatch(args: ParsedArgs): Promise<void> {
   const { subcommand, json } = args;
   const resolved = resolveAlias(subcommand, args.positionalArgs);
-  trackEvent('cli_command', { command: resolved.canonical, subview: resolved.subview ?? '' });
 
   try {
     // ─── reject invalid flags early (for all commands) ───────────────
@@ -236,7 +234,7 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
     if (subcommand === 'buy' || subcommand === 'sell') {
       const [ticker, countStr, priceStr] = args.positionalArgs;
       if (!ticker || !countStr) {
-        const usage = `Usage: ${subcommand} <ticker> <count> [price_in_cents] [--side yes|no]`;
+        const usage = `Usage: ${subcommand} <ticker> <count> [price] [--side yes|no]  (price: 1-99 cents or 0.01-0.99 dollars)`;
         const errResp = wrapError(subcommand, 'MISSING_ARGS', usage);
         if (json) {
           console.log(JSON.stringify(errResp));
@@ -283,9 +281,7 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
         side: tradeSide,
         type: 'limit',
         count: validated.count,
-        ...(tradeSide === 'no'
-          ? { no_price: effectivePrice }
-          : { yes_price: effectivePrice }),
+        dollar_price: priceCentsToDollarString(effectivePrice),
       };
       const data = await callKalshiApi('POST', '/portfolio/orders', { body });
       if (json) {
@@ -430,7 +426,6 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
           ? 'USER_ERROR'
           : 'INTERNAL_ERROR';
     const resp = wrapError(subcommand, errorCode, message);
-    trackEvent('error_occurred', { command: subcommand, error_code: errorCode });
 
     if (json) {
       console.log(JSON.stringify(resp));

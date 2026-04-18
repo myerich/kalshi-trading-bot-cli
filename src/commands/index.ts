@@ -1,4 +1,4 @@
-import { callKalshiApi } from '../tools/kalshi/api.js';
+import { callKalshiApi, priceCentsToDollarString } from '../tools/kalshi/api.js';
 import type { KalshiOrder, KalshiPosition } from '../tools/kalshi/types.js';
 import type { KalshiBalanceResponse } from './formatters.js';
 import {
@@ -14,7 +14,6 @@ import { handlePortfolio, formatPortfolioHuman } from './portfolio.js';
 import { reviewPortfolio, formatReviewHuman } from './review.js';
 import { buildHelp, validateTradeArgs } from './help.js';
 import { fetchMarketQuote } from './helpers.js';
-import { trackEvent } from '../utils/telemetry.js';
 
 export interface CommandResult {
   output: string;
@@ -35,7 +34,6 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
   const parts = trimmed.slice(1).trim().split(/\s+/);
   const command = parts[0]?.toLowerCase();
   const args = parts.slice(1);
-  trackEvent('slash_command', { command: command ?? '' });
 
   switch (command) {
     case 'help': {
@@ -103,14 +101,11 @@ export async function executePendingTrade(trade: NonNullable<CommandResult['pend
     side: trade.side,
     type: 'limit',
     count: trade.count,
-    ...(trade.side === 'no'
-      ? { no_price: effectivePrice }
-      : { yes_price: effectivePrice }),
+    dollar_price: priceCentsToDollarString(effectivePrice),
   };
 
   const data = await callKalshiApi('POST', '/portfolio/orders', { body });
   const order = data.order as Record<string, unknown> | undefined;
-  trackEvent('trade_executed', { action: trade.action, side: trade.side, success: 'true' });
   if (order) {
     return `Order placed. ID: ${order.order_id} | Status: ${order.status}`;
   }
@@ -187,7 +182,7 @@ function handleTradeCommand(action: 'buy' | 'sell', args: string[]): CommandResu
   const [ticker, countStr, ...rest] = args;
 
   if (!ticker || !countStr) {
-    return { output: `Usage: /${action} <ticker> <count> [price_in_cents] [yes|no]` };
+    return { output: `Usage: /${action} <ticker> <count> [price] [yes|no]  (price: 1-99 cents or 0.01-0.99 dollars)` };
   }
 
   // Extract side and price from remaining args: [price] [side], [side], or nothing
