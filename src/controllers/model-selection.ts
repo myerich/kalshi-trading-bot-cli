@@ -1,5 +1,4 @@
 import { getSetting, setSetting } from '../utils/config.js';
-import { trackEvent } from '../utils/telemetry.js';
 import {
   checkApiKeyExistsForProvider,
   getProviderDisplayName,
@@ -217,7 +216,6 @@ export class ModelSelectionController {
   }
 
   private completeModelSwitch(newProvider: string, newModelId: string) {
-    trackEvent('model_change', { provider: newProvider, model: newModelId });
     this.providerValue = newProvider;
     this.modelValue = newModelId;
     setSetting('provider', newProvider);

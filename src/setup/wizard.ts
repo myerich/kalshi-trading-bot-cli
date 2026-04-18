@@ -7,6 +7,9 @@ import { checkApiKeyExists, saveApiKeyToEnv, ENV_PATH } from '../utils/env.js';
 import { callKalshiApi } from '../tools/kalshi/api.js';
 import { loadBotConfig, saveBotConfig } from '../utils/bot-config.js';
 import { appPath } from '../utils/paths.js';
+import { setSetting } from '../utils/config.js';
+import { getModelsForProvider } from '../utils/model.js';
+import { getOllamaModels } from '../utils/ollama.js';
 import type { SelectItem } from '@mariozechner/pi-tui';
 
 export type WizardState =
@@ -16,6 +19,8 @@ export type WizardState =
   | 'octagon_api_key'
   | 'llm_provider_select'
   | 'llm_api_key'
+  | 'llm_model_select'
+  | 'llm_model_input'
   | 'testing'
   | 'complete';
 
@@ -32,6 +37,7 @@ export class SetupWizardController {
   private testResults: TestResult[] = [];
   private configWritten = false;
   private selectedProvider: string | null = null;
+  private pendingModels: { id: string; displayName: string }[] = [];
   private readonly onComplete: () => void;
   private readonly onChange: () => void;
   private active = false;
@@ -62,6 +68,7 @@ export class SetupWizardController {
     this.testResults = [];
     this.configWritten = false;
     this.selectedProvider = null;
+    this.pendingModels = [];
     this.currentInput = null;
     this.currentSelector = null;
     this.onChange();
@@ -112,9 +119,12 @@ export class SetupWizardController {
       case 'octagon_api_key':
         return 'Step 3/5: Octagon API Key';
       case 'llm_provider_select':
-        return 'Step 4/5: LLM Provider';
+        return 'Step 4/6: LLM Provider';
       case 'llm_api_key':
-        return `Step 5/5: ${this.selectedProvider ?? 'LLM'} API Key`;
+        return `Step 5/6: ${this.selectedProvider ?? 'LLM'} API Key`;
+      case 'llm_model_select':
+      case 'llm_model_input':
+        return `Step 6/6: ${this.selectedProvider ?? 'LLM'} Model`;
       case 'testing':
         return 'Testing connections...';
       case 'complete':
@@ -139,6 +149,14 @@ export class SetupWizardController {
         return 'Select your LLM provider. You can change this later with /model.';
       case 'llm_api_key':
         return `Paste your ${this.selectedProvider ?? 'LLM'} API key below.`;
+      case 'llm_model_select':
+        return this.selectedProvider === 'ollama'
+          ? this.pendingModels.length === 0
+            ? 'No Ollama models found locally. Pull one with `ollama pull <model>` then re-run setup.'
+            : 'Select an Ollama model to use.'
+          : `Select a ${this.selectedProvider ?? 'LLM'} model. You can change this later with /model.`;
+      case 'llm_model_input':
+        return `Enter the ${this.selectedProvider ?? 'LLM'} model identifier.\nExamples: anthropic/claude-3.5-sonnet, openai/gpt-4-turbo, meta-llama/llama-3-70b`;
       case 'testing':
         return '';
       case 'complete':
@@ -158,6 +176,8 @@ export class SetupWizardController {
       case 'llm_api_key':
         return 'Enter to confirm · Esc to cancel setup';
       case 'llm_provider_select':
+      case 'llm_model_select':
+      case 'llm_model_input':
         return 'Enter to confirm · Esc to cancel setup';
       case 'testing':
         return '';
@@ -171,7 +191,10 @@ export class SetupWizardController {
 
   /** Returns the component that should receive focus, or null for text-only states */
   getFocusTarget(): ApiKeyInputComponent | VimSelectList | null {
-    if (this.wizardState === 'llm_provider_select' && this.currentSelector) {
+    if (
+      (this.wizardState === 'llm_provider_select' || this.wizardState === 'llm_model_select') &&
+      this.currentSelector
+    ) {
       return this.currentSelector;
     }
     if (this.currentInput) {
@@ -268,6 +291,28 @@ export class SetupWizardController {
         if (!this.currentInput) {
           const input = new ApiKeyInputComponent(true);
           input.onSubmit = (value) => this.handleLlmApiKeySubmit(value);
+          input.onCancel = () => this.cancel();
+          this.currentInput = input;
+        }
+        return this.currentInput;
+      }
+      case 'llm_model_select': {
+        if (!this.currentSelector) {
+          const items: SelectItem[] = this.pendingModels.map((m, idx) => ({
+            value: m.id,
+            label: `${idx + 1}. ${m.displayName}`,
+          }));
+          const list = new VimSelectList(items, 10, selectListTheme);
+          list.onSelect = (item) => this.handleModelSelect(item.value);
+          list.onCancel = () => this.cancel();
+          this.currentSelector = list;
+        }
+        return this.currentSelector;
+      }
+      case 'llm_model_input': {
+        if (!this.currentInput) {
+          const input = new ApiKeyInputComponent(false);
+          input.onSubmit = (value) => this.handleModelInputSubmit(value);
           input.onCancel = () => this.cancel();
           this.currentInput = input;
         }
@@ -440,17 +485,69 @@ export class SetupWizardController {
       return;
     }
     if (providerId === 'ollama') {
-      // Ollama runs locally — no API key needed, but track the selection
+      // Ollama runs locally — no API key needed; jump straight to model picker.
       this.selectedProvider = 'ollama';
-      this.runTests().catch((err) => {
-        this.testResults = [{ name: 'Setup error', status: 'fail', message: String(err) }];
-        this.wizardState = 'complete';
-        this.onChange();
-      });
+      this.loadModelsAndTransition('ollama');
       return;
     }
     this.selectedProvider = providerId;
     this.transition('llm_api_key');
+  }
+
+  /**
+   * Populate `pendingModels` for the chosen provider and transition to the
+   * appropriate model-selection screen. OpenRouter has no canonical catalog,
+   * so we drop into a free-text input. Ollama models are discovered locally.
+   */
+  private loadModelsAndTransition(providerId: string) {
+    if (providerId === 'openrouter') {
+      this.pendingModels = [];
+      this.transition('llm_model_input');
+      return;
+    }
+    if (providerId === 'ollama') {
+      // Discover installed models asynchronously, then show the selector.
+      getOllamaModels()
+        .then((ids) => {
+          this.pendingModels = ids.map((id) => ({ id, displayName: id }));
+          this.transition('llm_model_select');
+        })
+        .catch(() => {
+          this.pendingModels = [];
+          this.transition('llm_model_select');
+        });
+      return;
+    }
+    this.pendingModels = getModelsForProvider(providerId);
+    this.transition('llm_model_select');
+  }
+
+  private handleModelSelect(modelId: string | null) {
+    if (!modelId || !this.selectedProvider) return;
+    const fullId = this.selectedProvider === 'ollama' ? `ollama:${modelId}` : modelId;
+    this.persistProviderAndModel(this.selectedProvider, fullId);
+    this.runTests().catch((err) => {
+      this.testResults = [{ name: 'Setup error', status: 'fail', message: String(err) }];
+      this.wizardState = 'complete';
+      this.onChange();
+    });
+  }
+
+  private handleModelInputSubmit(value: string | null) {
+    if (!value || !this.selectedProvider) return;
+    // OpenRouter is the only provider routed here; it uses the `openrouter:` prefix.
+    const fullId = `${this.selectedProvider}:${value.trim()}`;
+    this.persistProviderAndModel(this.selectedProvider, fullId);
+    this.runTests().catch((err) => {
+      this.testResults = [{ name: 'Setup error', status: 'fail', message: String(err) }];
+      this.wizardState = 'complete';
+      this.onChange();
+    });
+  }
+
+  private persistProviderAndModel(providerId: string, modelId: string) {
+    setSetting('provider', providerId);
+    setSetting('modelId', modelId);
   }
 
   private handleLlmApiKeySubmit(value: string | null) {
@@ -469,12 +566,8 @@ export class SetupWizardController {
       if (envName) {
         this.stageEnv(envName, value);
       }
+      this.loadModelsAndTransition(this.selectedProvider);
     }
-    this.runTests().catch((err) => {
-      this.testResults = [{ name: 'Setup error', status: 'fail', message: String(err) }];
-      this.wizardState = 'complete';
-      this.onChange();
-    });
   }
 
   /** Map provider id → base URL for /models endpoint test */

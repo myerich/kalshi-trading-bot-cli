@@ -8,7 +8,6 @@ import type {
 } from '../agent/index.js';
 import type { DisplayEvent } from '../agent/types.js';
 import type { HistoryItem, HistoryItemStatus, WorkingState } from '../types.js';
-import { trackEvent } from '../utils/telemetry.js';
 
 type ChangeListener = () => void;
 
@@ -21,7 +20,7 @@ export class AgentRunnerController {
   private workingStateValue: WorkingState = { status: 'idle' };
   private errorValue: string | null = null;
   private pendingApprovalValue: { tool: string; args: Record<string, unknown> } | null = null;
-  private readonly agentConfig: AgentConfig;
+  private readonly getAgentConfig: () => AgentConfig;
   private readonly inMemoryChatHistory: InMemoryChatHistory;
   private readonly onChange?: ChangeListener;
   private abortController: AbortController | null = null;
@@ -29,11 +28,11 @@ export class AgentRunnerController {
   private sessionApprovedTools = new Set<string>();
 
   constructor(
-    agentConfig: AgentConfig,
+    getAgentConfig: () => AgentConfig,
     inMemoryChatHistory: InMemoryChatHistory,
     onChange?: ChangeListener,
   ) {
-    this.agentConfig = agentConfig;
+    this.getAgentConfig = getAgentConfig;
     this.inMemoryChatHistory = inMemoryChatHistory;
     this.onChange = onChange;
   }
@@ -113,9 +112,8 @@ export class AgentRunnerController {
     this.emitChange();
 
     try {
-      trackEvent('agent_query_start', { model: this.agentConfig.model ?? '' });
       const agent = await Agent.create({
-        ...this.agentConfig,
+        ...this.getAgentConfig(),
         signal: this.abortController.signal,
         requestToolApproval: this.requestToolApproval,
         sessionApprovedTools: this.sessionApprovedTools,
@@ -128,19 +126,16 @@ export class AgentRunnerController {
         await this.handleEvent(event);
       }
       if (finalAnswer) {
-        trackEvent('agent_query_complete', { model: this.agentConfig.model ?? '', duration_ms: Date.now() - startTime, success: 'true' });
         return { answer: finalAnswer };
       }
       return undefined;
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        trackEvent('agent_query_complete', { model: this.agentConfig.model ?? '', duration_ms: Date.now() - startTime, success: 'false', interrupted: 'true' });
         this.markLastProcessing('interrupted');
         this.workingStateValue = { status: 'idle' };
         this.emitChange();
         return undefined;
       }
-      trackEvent('agent_query_complete', { model: this.agentConfig.model ?? '', duration_ms: Date.now() - startTime, success: 'false', interrupted: 'false' });
       const message = error instanceof Error ? error.message : String(error);
       this.errorValue = message;
       this.markLastProcessing('error');

@@ -37,7 +37,6 @@ import { ensureIndex, onIndexProgress, getRefreshPromise } from './tools/kalshi/
 import { callKalshiApi } from './tools/kalshi/api.js';
 import type { KalshiMarket } from './tools/kalshi/types.js';
 import { SetupWizardController } from './setup/wizard.js';
-import { trackEvent } from './utils/telemetry.js';
 
 function truncateAtWord(str: string, maxLength: number): string {
   if (str.length <= maxLength) {
@@ -262,7 +261,7 @@ export async function runCli(options?: { forceSetup?: boolean }) {
 
 
   const agentRunner = new AgentRunnerController(
-    { model: modelSelection.model, modelProvider: modelSelection.provider, maxIterations: 10 },
+    () => ({ model: modelSelection.model, modelProvider: modelSelection.provider, maxIterations: 10 }),
     modelSelection.inMemoryChatHistory,
     () => {
       renderHistory(chatLog, agentRunner.history);
@@ -451,7 +450,6 @@ export async function runCli(options?: { forceSetup?: boolean }) {
         tui.requestRender();
         return;
       } else {
-        trackEvent('trade_rejected', { action: pendingTrade.action, side: pendingTrade.side });
         chatLog.addQuery(query);
         chatLog.resetToolGrouping();
         chatLog.finalizeAnswer('Order canceled.');
