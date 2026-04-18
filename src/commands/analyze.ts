@@ -7,7 +7,7 @@ import { EdgeComputer } from '../scan/edge-computer.js';
 import { OctagonClient } from '../scan/octagon-client.js';
 import { createOctagonInvoker } from '../scan/invoker.js';
 import * as readline from 'node:readline';
-import { callKalshiApi, KalshiApiError } from '../tools/kalshi/api.js';
+import { callKalshiApi, KalshiApiError, priceCentsToDollarString, supportsFractional } from '../tools/kalshi/api.js';
 import type { KalshiMarket, KalshiEvent, KalshiOrder, KalshiPosition } from '../tools/kalshi/types.js';
 import { openPosition, closePosition, getOpenPositions } from '../db/positions.js';
 import { logTrade } from '../db/trades.js';
@@ -265,6 +265,7 @@ export async function handleAnalyze(
   const noBid = parsePriceField(market.no_bid_dollars, market.dollar_no_bid, market.no_bid);
   const entryPrice = (snapshot.edge > 0 ? yesAsk : noAsk);
 
+  const priceDecimals = supportsFractional(market) ? 4 : 2;
   let signal: string;
   if (existingPosition) {
     const holdDir = existingPosition.direction.toUpperCase();
@@ -274,13 +275,13 @@ export async function handleAnalyze(
     if (edgeReversed) {
       const closePrice = existingPosition.direction === 'yes' ? yesBid : noBid;
       signal = Number.isFinite(closePrice)
-        ? `SELL ${holdDir} @ $${closePrice.toFixed(2)} (close position)`
+        ? `SELL ${holdDir} @ $${closePrice.toFixed(priceDecimals)} (close position)`
         : `SELL ${holdDir} (close position)`;
     } else {
       signal = `HOLD (long ${holdDir} ×${existingPosition.size})`;
     }
   } else {
-    signal = Number.isFinite(entryPrice) ? `BUY ${side} @ $${entryPrice.toFixed(2)}` : `BUY ${side}`;
+    signal = Number.isFinite(entryPrice) ? `BUY ${side} @ $${entryPrice.toFixed(priceDecimals)}` : `BUY ${side}`;
   }
   const edgePp = `${snapshot.edge >= 0 ? '+' : ''}${(snapshot.edge * 100).toFixed(0)}pp`;
 
@@ -330,7 +331,11 @@ export async function handleAnalyze(
     rawReport: report.rawResponse,
     existingPosition,
     closePriceCents: existingPosition
-      ? Math.round((existingPosition.direction === 'yes' ? yesBid : noBid) * 100) || null
+      ? (() => {
+          const raw = (existingPosition.direction === 'yes' ? yesBid : noBid) * 100;
+          if (!Number.isFinite(raw) || raw <= 0) return null;
+          return supportsFractional(market) ? raw : Math.round(raw);
+        })()
       : null,
   };
 }
@@ -520,9 +525,8 @@ export async function promptAnalyzeActions(data: AnalyzeData): Promise<void> {
               side: sellSide,
               type: 'limit',
               count: sellSize,
+              dollar_price: priceCentsToDollarString(closePrice),
             };
-            if (sellSide === 'yes') orderPayload.yes_price = closePrice;
-            else orderPayload.no_price = closePrice;
 
             const orderRes = await callKalshiApi('POST', '/portfolio/orders', { body: orderPayload });
             const order = (orderRes.order ?? orderRes) as KalshiOrder;
@@ -595,9 +599,8 @@ export async function promptAnalyzeActions(data: AnalyzeData): Promise<void> {
             side,
             type: 'limit',
             count: data.kelly.contracts,
+            dollar_price: priceCentsToDollarString(price),
           };
-          if (side === 'yes') orderPayload.yes_price = price;
-          else orderPayload.no_price = price;
 
           const orderRes = await callKalshiApi('POST', '/portfolio/orders', { body: orderPayload });
           const order = (orderRes.order ?? orderRes) as KalshiOrder;

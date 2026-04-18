@@ -117,7 +117,7 @@ export async function reviewPortfolio(): Promise<PositionReview[]> {
       edge,
       signal,
       sellSide: direction,
-      closePriceCents: Math.max(1, closePriceCents),
+      closePriceCents: closePriceCents > 0 ? closePriceCents : 1,
       reason,
     };
   });
@@ -144,10 +144,15 @@ export function formatReviewHuman(reviews: PositionReview[]): string {
   for (const r of sells) {
     const dirLabel = r.direction.toUpperCase();
     const edgePp = `${r.edge >= 0 ? '+' : ''}${(r.edge * 100).toFixed(0)}pp`;
+    // Integer cents render as-is; fractional (subpenny) cents render as dollars so the
+    // suggested /sell command parses back correctly via validateTradeArgs.
+    const isSubpenny = !Number.isInteger(r.closePriceCents);
+    const priceDisplay = isSubpenny ? `$${(r.closePriceCents / 100).toFixed(4)}` : `${r.closePriceCents}¢`;
+    const priceArg = isSubpenny ? (r.closePriceCents / 100).toFixed(4) : String(r.closePriceCents);
     lines.push(`  ⚠  ${r.ticker}  ${dirLabel} ×${r.size}`);
     lines.push(`     Edge: ${edgePp}  |  ${r.reason}`);
-    lines.push(`     → SELL ${dirLabel} @ ${r.closePriceCents}¢`);
-    lines.push(`     Command: /sell ${r.ticker} ${r.size} ${r.closePriceCents} ${r.direction}`);
+    lines.push(`     → SELL ${dirLabel} @ ${priceDisplay}`);
+    lines.push(`     Command: /sell ${r.ticker} ${r.size} ${priceArg} ${r.direction}`);
     if (r.analyzeError) {
       lines.push(`     ⚠ Analysis error: ${r.analyzeError}`);
     }

@@ -218,6 +218,14 @@ export function formatExchangeStatus(data: Record<string, unknown>): string {
   return `${active}\n${trading}`;
 }
 
+/** Format a cents value as a dollar string, preserving subpenny precision. */
+function formatPriceDollars(priceCents: number): string {
+  const dollars = priceCents / 100;
+  // Fractional cents (subpenny) → 4 decimals; whole cents → 2 decimals
+  const decimals = Number.isInteger(priceCents) ? 2 : 4;
+  return `$${dollars.toFixed(decimals)}`;
+}
+
 export function formatOrderConfirmation(
   ticker: string,
   action: 'buy' | 'sell',
@@ -225,14 +233,16 @@ export function formatOrderConfirmation(
   count: number,
   price: number | undefined
 ): string {
-  const priceStr = price !== undefined ? `$${(price / 100).toFixed(2)}` : 'market price';
-  const estCost = price !== undefined ? `$${((price / 100) * count).toFixed(2)}` : 'variable';
+  const priceStr = price !== undefined ? formatPriceDollars(price) : 'market price';
+  const estCostDecimals = price !== undefined && !Number.isInteger(price) ? 4 : 2;
+  const estCost = price !== undefined ? `$${((price / 100) * count).toFixed(estCostDecimals)}` : 'variable';
+  const countStr = Number.isInteger(count) ? String(count) : count.toFixed(4).replace(/\.?0+$/, '');
   const lines = [
     '**Order Preview**',
     '',
     `Ticker:  ${ticker}`,
     `Action:  ${action.toUpperCase()} ${side.toUpperCase()}`,
-    `Count:   ${count} contract${count !== 1 ? 's' : ''}`,
+    `Count:   ${countStr} contract${count !== 1 ? 's' : ''}`,
     `Price:   ${priceStr}`,
     `Est. Cost: ${estCost}`,
   ];

@@ -134,13 +134,14 @@ export async function kellySize(params: KellySizeParams): Promise<KellyResult> {
     : edge;
   const absEdge = Math.abs(executableEdge);
 
-  // Entry price from executable quote — computed early so it's available even when sizing is skipped
-  let entryPriceCents: number;
-  if (side === 'yes') {
-    entryPriceCents = executableProb != null ? Math.round(executableProb * 100) : Math.round(marketProb * 100);
-  } else {
-    entryPriceCents = executableProb != null ? Math.round((1 - executableProb) * 100) : Math.round((1 - marketProb) * 100);
-  }
+  // Entry price from executable quote — computed early so it's available even when sizing is skipped.
+  // Preserve fractional cents (e.g. 56.5¢ = $0.5650) for subpenny markets; round for standard markets.
+  const subpenny = market ? supportsFractional(market) : false;
+  const rawEntryProb = side === 'yes'
+    ? (executableProb ?? marketProb)
+    : (1 - (executableProb ?? marketProb));
+  const rawEntryCents = rawEntryProb * 100;
+  const entryPriceCents = subpenny ? rawEntryCents : Math.round(rawEntryCents);
 
   const makeResult = (overrides: Partial<KellyResult> = {}): KellyResult => ({
     side,
