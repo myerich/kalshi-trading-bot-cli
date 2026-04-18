@@ -879,6 +879,39 @@ export class BrowseController {
    */
   private async extractAllOutcomeProbs(ticker: string): Promise<Map<string, number>> {
     const probs = new Map<string, number>();
+
+    // Try prefetch DB first to avoid an Octagon API call
+    try {
+      const db = getDb();
+      // Look up by event_ticker prefix (ticker may be a market ticker like KXBTC-26-B95000)
+      // Try exact match first, then find by event prefix
+      const row = db.query(
+        `SELECT outcome_probabilities_json FROM octagon_reports
+         WHERE variant_used = 'events-api' AND outcome_probabilities_json IS NOT NULL
+         AND (close_time IS NULL OR close_time > $now)
+         AND (event_ticker = $t OR event_ticker IN (
+           SELECT event_ticker FROM octagon_reports WHERE ticker = $t AND variant_used != 'events-api' LIMIT 1
+         ))
+         ORDER BY fetched_at DESC LIMIT 1`,
+      ).get({ $t: ticker, $now: new Date().toISOString() }) as { outcome_probabilities_json: string } | null;
+
+      if (row?.outcome_probabilities_json) {
+        const outcomes = JSON.parse(row.outcome_probabilities_json) as Array<{
+          market_ticker: string; model_probability: number;
+        }>;
+        for (const o of outcomes) {
+          if (typeof o.model_probability === 'number' && o.market_ticker) {
+            const prob = o.model_probability / 100;
+            if (prob >= 0 && prob <= 1) {
+              probs.set(o.market_ticker.toUpperCase(), prob);
+            }
+          }
+        }
+        if (probs.size > 0) return probs;
+      }
+    } catch { /* prefetch lookup failed — fall back to API */ }
+
+    // Fall back to individual Octagon cache API call
     try {
       const rawCache = await callOctagon(ticker, 'cache');
       const parsed = JSON.parse(rawCache);
@@ -890,7 +923,6 @@ export class BrowseController {
           ? JSON.parse(version.outcome_probabilities_json)
           : version.outcome_probabilities_json;
 
-      // Octagon API always returns percentages (0-100); normalize each value individually
       for (const o of outcomes) {
         if (typeof o.model_probability === 'number' && o.market_ticker) {
           const prob = o.model_probability / 100;

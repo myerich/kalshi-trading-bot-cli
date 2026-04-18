@@ -45,6 +45,78 @@ export class OctagonClient {
       ?? DEFAULT_DAILY_CREDIT_CEILING;
   }
 
+  /**
+   * Try to build an OctagonReport from the prefetched events API data in SQLite.
+   * Returns null if no fresh prefetch data is available for this event.
+   * This avoids an individual Octagon cache API call when the prefetch is fresh.
+   */
+  tryFromPrefetch(ticker: string, eventTicker: string, closeTimeIso?: string): OctagonReport | null {
+    const row = this.db.query(
+      `SELECT model_prob, market_prob, mispricing_signal, drivers_json, fetched_at, expires_at,
+              outcome_probabilities_json, report_id, confidence_score
+       FROM octagon_reports WHERE event_ticker = $et AND variant_used = 'events-api'
+       AND (close_time IS NULL OR close_time > $now)
+       ORDER BY fetched_at DESC LIMIT 1`,
+    ).get({ $et: eventTicker, $now: new Date().toISOString() }) as {
+      model_prob: number; market_prob: number | null; mispricing_signal: string | null;
+      drivers_json: string | null; fetched_at: number; expires_at: number;
+      outcome_probabilities_json: string | null; report_id: string;
+      confidence_score: number | null;
+    } | null;
+
+    if (!row) return null;
+
+    // Check if the prefetch is still fresh
+    const now = Math.floor(Date.now() / 1000);
+    if (row.expires_at < now) return null;
+
+    // Extract per-market probability if available
+    let modelProb = row.model_prob;
+    let marketProb = row.market_prob ?? 0.5;
+    if (row.outcome_probabilities_json) {
+      try {
+        const outcomes = JSON.parse(row.outcome_probabilities_json) as Array<{
+          market_ticker: string; model_probability: number; market_probability: number;
+        }>;
+        const match = outcomes.find(
+          o => o.market_ticker.toUpperCase() === ticker.toUpperCase(),
+        );
+        if (match) {
+          modelProb = match.model_probability / 100;
+          marketProb = match.market_probability / 100;
+        }
+      } catch { /* malformed JSON — use event-level */ }
+    }
+
+    // Parse drivers from prefetched data
+    let drivers: PriceDriver[] = [];
+    if (row.drivers_json) {
+      try { drivers = JSON.parse(row.drivers_json); } catch { /* skip */ }
+    }
+
+    const edge = modelProb - marketProb;
+    let signal: MispricingSignal = 'fair_value';
+    if (Math.abs(edge) >= 0.03) signal = edge > 0 ? 'underpriced' : 'overpriced';
+
+    return {
+      ticker,
+      eventTicker,
+      modelProb,
+      marketProb,
+      mispricingSignal: (row.mispricing_signal as MispricingSignal) ?? signal,
+      drivers,
+      catalysts: [],
+      sources: [],
+      resolutionHistory: '',
+      contractSnapshot: '',
+      variantUsed: 'cache',
+      fetchedAt: row.fetched_at,
+      rawResponse: '',
+      cacheMiss: false,
+      reportId: row.report_id,
+    };
+  }
+
   async fetchReport(
     ticker: string,
     eventTicker: string,
@@ -142,10 +214,14 @@ export class OctagonClient {
           report = { ...defaults, cacheMiss: true };
           return report;
         }
-        // Check if model probability was actually provided
+        // Check if model probability was actually provided (event-level)
         const source = (versions?.[0] ?? parsed) as Record<string, unknown>;
         hasExplicitModelProb = (source.modelProb ?? source.model_prob ?? source.model_probability) != null;
         report = this.mapJsonToReport(parsed, defaults);
+        // Per-market probability from outcome_probabilities_json also counts as explicit
+        if (report.modelProb !== defaults.modelProb) {
+          hasExplicitModelProb = true;
+        }
       } else {
         report = this.extractFromMarkdown(raw, defaults);
       }
@@ -283,11 +359,34 @@ export class OctagonClient {
     const versions = parsed.versions as Array<Record<string, unknown>> | undefined;
     const source = versions?.[0] ?? parsed;
 
-    // Octagon JSON API returns probabilities as percentages (0-100), not fractions.
-    // Use toProbFromJson which always divides by 100, unlike toProb which uses a
+    // For multi-outcome events, look up this specific market's probability
+    // from outcome_probabilities_json before falling back to event-level values.
+    // The event-level model_probability is typically the first outcome's value,
+    // not the one for the market we're analyzing.
+    let modelProb: number | null = null;
+    let marketProb: number | null = null;
+    const outcomeJson = (source as Record<string, unknown>).outcome_probabilities_json;
+    if (outcomeJson != null) {
+      try {
+        const outcomes = typeof outcomeJson === 'string'
+          ? JSON.parse(outcomeJson) : outcomeJson;
+        if (Array.isArray(outcomes)) {
+          const match = outcomes.find(
+            (o: { market_ticker?: string }) => String(o.market_ticker).toUpperCase() === defaults.ticker.toUpperCase()
+          );
+          if (match) {
+            modelProb = this.toProbFromJson(match.model_probability);
+            marketProb = this.toProbFromJson(match.market_probability);
+          }
+        }
+      } catch { /* malformed outcome JSON — fall through */ }
+    }
+
+    // Fall back to event-level values (correct for single-outcome markets).
+    // Uses toProbFromJson which always divides by 100, unlike toProb which uses a
     // > 1 heuristic that fails for sub-1% values (e.g. 0.9% stays as 0.9 → 90%).
-    const modelProb = this.toProbFromJson(source.modelProb ?? source.model_prob ?? source.model_probability) ?? defaults.modelProb;
-    const marketProb = this.toProbFromJson(source.marketProb ?? source.market_prob ?? source.market_probability) ?? defaults.marketProb;
+    modelProb = modelProb ?? this.toProbFromJson(source.modelProb ?? source.model_prob ?? source.model_probability) ?? defaults.modelProb;
+    marketProb = marketProb ?? this.toProbFromJson(source.marketProb ?? source.market_prob ?? source.market_probability) ?? defaults.marketProb;
 
     return {
       ...defaults,

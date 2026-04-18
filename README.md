@@ -6,13 +6,13 @@ Runs deep fundamental research on every market — independent probability estim
 
 Integrates with the [Octagon Research API](https://app.octagonai.co) for AI-generated probability estimates that power the edge detection engine.
 
-![Kalshi Deep Trading Bot](assets/screenshot.png)
+![Kalshi Trading Bot CLI](assets/screenshot.png)
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/OctagonAI/kalshi-deep-trading-bot-cli.git
-cd kalshi-deep-trading-bot-cli
+git clone https://github.com/OctagonAI/kalshi-trading-bot-cli.git
+cd kalshi-trading-bot-cli
 bun install
 bun start
 ```
@@ -26,7 +26,7 @@ The setup wizard runs automatically on first launch — it walks you through API
 ```
 $ bun start
 
-Welcome to Kalshi Deep Trading Bot
+Welcome to Kalshi Trading Bot CLI
 Type help for commands, or just ask a question.
 
 > search crypto
@@ -73,12 +73,14 @@ Type help for commands, or just ask a question.
 | Command | Description |
 |---------|-------------|
 | `search [theme\|ticker\|query]` | Find markets by keyword or theme |
+| `search edge [--min-edge N]` | Scan all markets by model edge |
 | `analyze <ticker>` | Deep analysis: edge, drivers, Kelly sizing |
 | `watch <ticker>` | Live price and orderbook feed |
 | `watch --theme <theme>` | Continuous theme scan |
 | `buy <ticker> <count> [price] [yes\|no]` | Buy contracts |
 | `sell <ticker> <count> [price] [yes\|no]` | Sell contracts |
 | `cancel <order_id>` | Cancel a resting order |
+| `backtest` | Model accuracy scorecard + live edge scanner |
 | `portfolio` | Positions, P&L, risk snapshot |
 | `setup` | Re-run setup wizard (inside TUI) |
 | `init` | Launch setup wizard from CLI (`bun start init`) |
@@ -94,9 +96,68 @@ Type help for commands, or just ask a question.
 | `--performance` | Include win rate, Sharpe, Brier scores (portfolio) |
 | `--dry-run` | Scan without persisting edges (watch) |
 | `--verbose` | Verbose output |
-| `--min-edge <n>` | Minimum edge threshold |
+| `--min-edge <n>` | Minimum edge threshold in pp (backtest default 0.5) |
 | `--interval <min>` | Scan interval in minutes (watch) |
 | `--live` | Force 15m scan interval (watch) |
+| `--days <n>` | Lookback period in days (backtest, default 15) |
+| `--max-age <n>` | Reject predictions older than N days (backtest, default = `--days`) |
+| `--resolved` | Resolved markets only (backtest) |
+| `--unresolved` | Open markets only (backtest) |
+| `--category <cat>` | Filter by category (backtest, search edge) |
+| `--limit <n>` | Max results to show (search edge, default 20) |
+| `--min-volume <n>` | Min per-contract volume (from Octagon snapshot; falls back to Kalshi lifetime if missing). Backtest default 1. |
+| `--min-price <n>` | Min contract price, 0-100 scale (backtest, default 5) |
+| `--max-price <n>` | Max contract price, 0-100 scale (backtest, default 95) |
+| `--export <path>` | Export per-market CSV (backtest) |
+
+### Backtesting
+
+Does the model find real edge? Look back N days, compare what the model said then to where the market is now.
+
+- **Resolved** — scored against Kalshi settlement (YES=100%, NO=0%)
+- **Unresolved** — mark-to-market vs current Kalshi trading price
+
+**Methodology (matches Supabase reference):**
+- Per-contract `mp`/`kp` come from `outcome_probabilities` on each Octagon snapshot — no event-level fallback.
+- Tradeability gate uses per-contract `volume`/`volume_24h` from the snapshot when present; falls back to Kalshi lifetime volume for pre-API-change cached snapshots.
+- `--min-edge` defaults to 0.5pp so the 0-5% edge bucket stays visible; each signal is tagged with an `edge_bucket` label (`0-5%`, `5-10%`, ..., `90%+`).
+- `flat_bet_roi` is capital-weighted: `sum(pnl) / sum(capital)`, where `capital = kp/100` for YES edges and `(100 - kp)/100` for NO edges.
+
+```bash
+bun start backtest                              # 15-day lookback (default)
+bun start backtest --days 30                    # 30-day lookback
+bun start backtest --max-age 14                 # only score predictions <=14d old
+bun start backtest --resolved                   # resolved only
+bun start backtest --unresolved --min-edge 10   # unresolved, 10pp threshold
+bun start backtest --category crypto            # filter by category
+bun start backtest --min-volume 10 --min-price 5 --max-price 95   # tradeable contracts only
+bun start backtest --export results.csv         # per-market detail
+```
+
+```text
+Octagon Backtest — 15-day lookback (04/02 – 04/17)
+══════════════════════════════════════════════════════════
+
+VERDICT: Model has edge (Skill +12.5% [CI: +4.1%, +20.8%]; ROI +7.8%)
+
+  Events         83
+  Markets        247   (142 resolved, 105 unresolved)
+  Brier (Octagon)   0.168
+  Brier (Market)    0.192
+  Skill Score       +12.5%  [95% CI: +4.1% to +20.8%]
+  Hit rate          61.4%  [95% CI: 54.2% to 68.1%]
+  Flat-bet P&L      +$14.38 (ROI: +7.8%)
+
+RESOLVED (142 markets)
+  Ticker                    Model   Mkt Then   Outcome   Edge    P&L
+  KXBTC-26APR-B95000        72%     58%        YES 100%  +14pp   +$0.42
+  ...
+
+UNRESOLVED (105 markets)
+  Ticker                    Model   Mkt Then   Now       Edge    M2M
+  KXBTC-26MAY-B110000       71%     58%        68%       +13pp   +$0.10
+  ...
+```
 
 ### Demo Mode
 
@@ -249,6 +310,16 @@ bun test             # Run tests
 ## Documentation
 
 See the [User Guide](GUIDE.md) for detailed usage instructions, examples, and tips.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=OctagonAI%2Fkalshi-trading-bot-cli&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=OctagonAI/kalshi-trading-bot-cli&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=OctagonAI/kalshi-trading-bot-cli&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=OctagonAI/kalshi-trading-bot-cli&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ## License
 

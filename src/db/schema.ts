@@ -162,6 +162,25 @@ export function migrate(db: Database): void {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS octagon_history (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      history_id          INTEGER NOT NULL,
+      event_ticker        TEXT NOT NULL,
+      captured_at         TEXT NOT NULL,
+      model_probability   REAL NOT NULL,
+      market_probability  REAL NOT NULL,
+      edge_pp             REAL,
+      confidence_score    REAL,
+      series_category     TEXT,
+      close_time          TEXT,
+      name                TEXT,
+      outcome_probabilities_json TEXT,
+      UNIQUE(event_ticker, history_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_history_event
+      ON octagon_history(event_ticker, captured_at);
   `);
 
   // Schema migrations for columns added after initial release
@@ -180,5 +199,29 @@ export function migrate(db: Database): void {
     db.exec(`ALTER TABLE event_index ADD COLUMN tags TEXT`);
     // Force re-index so tags get populated on next ensureIndex() call
     db.exec(`DELETE FROM event_index_meta WHERE key = 'last_refresh'`);
+  }
+
+  if (!reportCols.some((c) => c.name === 'has_history')) {
+    db.exec(`ALTER TABLE octagon_reports ADD COLUMN has_history INTEGER DEFAULT 0`);
+  }
+  if (!reportCols.some((c) => c.name === 'mutually_exclusive')) {
+    db.exec(`ALTER TABLE octagon_reports ADD COLUMN mutually_exclusive INTEGER DEFAULT 0`);
+  }
+  if (!reportCols.some((c) => c.name === 'series_category')) {
+    db.exec(`ALTER TABLE octagon_reports ADD COLUMN series_category TEXT`);
+  }
+  if (!reportCols.some((c) => c.name === 'confidence_score')) {
+    db.exec(`ALTER TABLE octagon_reports ADD COLUMN confidence_score REAL`);
+  }
+  if (!reportCols.some((c) => c.name === 'outcome_probabilities_json')) {
+    db.exec(`ALTER TABLE octagon_reports ADD COLUMN outcome_probabilities_json TEXT`);
+  }
+  if (!reportCols.some((c) => c.name === 'close_time')) {
+    db.exec(`ALTER TABLE octagon_reports ADD COLUMN close_time TEXT`);
+  }
+
+  const historyCols = db.query(`PRAGMA table_info(octagon_history)`).all() as Array<{ name: string }>;
+  if (!historyCols.some((c) => c.name === 'outcome_probabilities_json')) {
+    db.exec(`ALTER TABLE octagon_history ADD COLUMN outcome_probabilities_json TEXT`);
   }
 }

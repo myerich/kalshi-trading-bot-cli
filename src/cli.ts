@@ -314,10 +314,22 @@ export async function runCli(options?: { forceSetup?: boolean }) {
   };
 
   const searchSubcommands = (typed: string): AutocompleteItem[] | null => {
+    const edgeItem = { value: 'edge', label: 'edge', description: 'Scan all markets by model edge (default: ≥5pp, top 20)' };
+    const edgeOptions = [
+      { value: 'edge --min-edge 30', label: 'edge --min-edge 30', description: 'Markets with ≥30pp edge' },
+      { value: 'edge --min-edge 10', label: 'edge --min-edge 10', description: 'Markets with ≥10pp edge' },
+      { value: 'edge --category crypto', label: 'edge --category crypto', description: 'Crypto markets by edge' },
+      { value: 'edge --limit 50', label: 'edge --limit 50', description: 'Top 50 results' },
+    ];
     const themesItem = { value: 'themes', label: 'themes', description: 'List all available themes' };
-    if (!typed) return [themesItem, ...allThemes];
+    if (!typed) return [edgeItem, themesItem, ...allThemes];
     const lower = typed.toLowerCase();
-    const results = [themesItem, ...allThemes].filter((t) => t.value.toLowerCase().startsWith(lower));
+    if (lower.startsWith('edge')) {
+      const afterEdge = lower.slice(4).trimStart();
+      if (!afterEdge) return [edgeItem, ...edgeOptions];
+      return edgeOptions.filter(o => o.value.toLowerCase().includes(afterEdge));
+    }
+    const results = [edgeItem, themesItem, ...allThemes].filter((t) => t.value.toLowerCase().startsWith(lower));
     return results.length > 0 ? results : null;
   };
 
@@ -347,6 +359,7 @@ export async function runCli(options?: { forceSetup?: boolean }) {
       { value: 'buy', label: 'buy', description: 'Buy contracts' },
       { value: 'sell', label: 'sell', description: 'Sell contracts' },
       { value: 'cancel', label: 'cancel', description: 'Cancel an order' },
+      { value: 'backtest', label: 'backtest', description: 'Model accuracy & edge scanner' },
       { value: 'help', label: 'help', description: 'Show help' },
       { value: 'setup', label: 'setup', description: 'Re-run setup wizard' },
     ];
@@ -364,6 +377,22 @@ export async function runCli(options?: { forceSetup?: boolean }) {
     { name: 'buy', description: 'Buy contracts (defaults to YES side)', getArgumentCompletions: usageHint('<ticker> <count> [price] [yes|no]', 'e.g. KXBTC-26MAR14-T50049 10 56') },
     { name: 'sell', description: 'Sell contracts (defaults to YES side)', getArgumentCompletions: usageHint('<ticker> <count> [price] [yes|no]', 'e.g. KXBTC-26MAR14-T50049 10 56') },
     { name: 'cancel', description: 'Cancel a resting order', getArgumentCompletions: usageHint('<order_id>', 'the order UUID') },
+    // Analysis
+    { name: 'backtest', description: 'Model accuracy scorecard + live edge scanner', getArgumentCompletions: (typed: string): AutocompleteItem[] | null => {
+      const opts = [
+        { value: '--days 15', label: '--days 15', description: '15-day lookback (default)' },
+        { value: '--days 7', label: '--days 7', description: '7-day lookback' },
+        { value: '--days 30', label: '--days 30', description: '30-day lookback' },
+        { value: '--resolved', label: '--resolved', description: 'Resolved markets only' },
+        { value: '--unresolved', label: '--unresolved', description: 'Unresolved markets only' },
+        { value: '--category crypto', label: '--category crypto', description: 'Filter by category' },
+        { value: '--min-edge 10', label: '--min-edge 10', description: '10pp edge threshold' },
+        { value: '--export results.csv', label: '--export results.csv', description: 'Export CSV' },
+      ];
+      if (!typed) return opts;
+      const lower = typed.toLowerCase();
+      return opts.filter(o => o.value.toLowerCase().includes(lower));
+    }},
     // Utility
     { name: 'help', description: 'Show help (/help <command> for details)', getArgumentCompletions: helpTopicCompletions },
     { name: 'model', description: 'Change LLM model/provider', getArgumentCompletions: usageHint('<provider:model>', 'e.g. anthropic:sonnet') },
@@ -409,6 +438,36 @@ export async function runCli(options?: { forceSetup?: boolean }) {
 
     if (query.startsWith('/search')) {
       const themeArg = query.slice('/search'.length).trim() || 'top50';
+      // /search edge → edge scanner (inline, no browse flow)
+      if (themeArg.startsWith('edge')) {
+        chatLog.addQuery(query);
+        chatLog.resetToolGrouping();
+        try {
+          workingIndicator.setState({ status: 'thinking' });
+          tui.requestRender();
+          // Parse edge-specific flags from the rest of the args
+          const edgeArgs = themeArg.slice('edge'.length).trim().split(/\s+/).filter(Boolean);
+          let minEdgePp = 5;
+          let edgeLimit = 20;
+          let edgeCategory: string | undefined;
+          for (let i = 0; i < edgeArgs.length; i++) {
+            if (edgeArgs[i] === '--min-edge') { const v = Number(edgeArgs[++i]?.replace('%', '')); if (Number.isFinite(v)) minEdgePp = v; }
+            else if (edgeArgs[i] === '--limit') { const v = Number(edgeArgs[++i]); if (Number.isFinite(v) && v > 0) edgeLimit = v; }
+            else if (edgeArgs[i] === '--category' || edgeArgs[i] === '--theme') { edgeCategory = edgeArgs[++i]; }
+          }
+          const { scanEdges, formatEdgeScanHuman } = await import('./commands/search-edge.js');
+          const { getDb } = await import('./db/index.js');
+          const result = scanEdges(getDb(), { minEdgePp, limit: edgeLimit, category: edgeCategory });
+          workingIndicator.setState({ status: 'idle' });
+          chatLog.finalizeAnswer(formatResponse(formatEdgeScanHuman(result, minEdgePp)));
+          tui.requestRender();
+        } catch (err) {
+          workingIndicator.setState({ status: 'idle' });
+          chatLog.finalizeAnswer(`Error: ${err instanceof Error ? err.message : String(err)}`);
+          tui.requestRender();
+        }
+        return;
+      }
       // /search themes → inline themes list (no browse flow)
       if (themeArg === 'themes') {
         // Handled as slash command in handleSlashCommand via 'themes' case
@@ -468,10 +527,25 @@ export async function runCli(options?: { forceSetup?: boolean }) {
         workingIndicator.setState({ status: 'thinking' });
         tui.requestRender();
         const cmdResult = await handleSlashCommand(query);
-        workingIndicator.setState({ status: 'idle' });
         if (cmdResult !== null) {
           const formatted = formatResponse(cmdResult.output);
-          chatLog.finalizeAnswer(formatted);
+          const answerBox = chatLog.finalizeAnswer(formatted);
+          tui.requestRender();
+
+          // If the command has an async follow-up (e.g., backtest), animate the spinner while it runs
+          if (cmdResult.asyncFollowUp) {
+            answerBox.startSpinner(tui);
+            try {
+              const followUp = await cmdResult.asyncFollowUp();
+              answerBox.stopSpinner();
+              chatLog.finalizeAnswer(formatResponse(followUp));
+            } catch (err) {
+              answerBox.stopSpinner();
+              chatLog.finalizeAnswer(`Error: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          }
+
+          workingIndicator.setState({ status: 'idle' });
           if (cmdResult.pendingTrade) {
             pendingTrade = cmdResult.pendingTrade;
             chatLog.finalizeAnswer(
@@ -483,6 +557,7 @@ export async function runCli(options?: { forceSetup?: boolean }) {
           tui.requestRender();
           return;
         }
+        workingIndicator.setState({ status: 'idle' });
       } catch (err) {
         workingIndicator.setState({ status: 'idle' });
         chatLog.finalizeAnswer(`Error: ${err instanceof Error ? err.message : String(err)}`);

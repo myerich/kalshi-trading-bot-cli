@@ -54,6 +54,10 @@ function makeParsedArgs(overrides: Partial<ParsedArgs>): ParsedArgs {
     dryRun: false,
     verbose: false,
     performance: false,
+    resolved: false,
+    unresolved: false,
+
+
     parseErrors: [],
     ...overrides,
   };

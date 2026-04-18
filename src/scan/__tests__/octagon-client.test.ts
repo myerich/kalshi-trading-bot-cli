@@ -176,6 +176,61 @@ describe('OctagonClient', () => {
       expect(report.marketProb).toBe(0.65);
     });
 
+    test('extracts per-market probability from outcome_probabilities_json', () => {
+      const client = new OctagonClient(makeInvoker(''), db, audit);
+      const json = JSON.stringify({
+        versions: [{
+          model_probability: 1.6,
+          market_probability: 1.3,
+          outcome_probabilities_json: JSON.stringify([
+            { market_ticker: 'KXPRESNOMR-28-TMAS', model_probability: 1.6, market_probability: 1.3 },
+            { market_ticker: 'KXPRESNOMR-28-JDV', model_probability: 37.69, market_probability: 37.0 },
+            { market_ticker: 'KXPRESNOMR-28-MR', model_probability: 28.77, market_probability: 25.0 },
+          ]),
+        }],
+      });
+
+      const report = client.parseReport(json, 'KXPRESNOMR-28-JDV', 'KXPRESNOMR-28', 'cache');
+      expect(report.modelProb).toBeCloseTo(0.3769, 4);  // 37.69%, not 1.6%
+      expect(report.marketProb).toBeCloseTo(0.37, 4);
+    });
+
+    test('handles outcome_probabilities_json as array (not string) with case-insensitive ticker match', () => {
+      const client = new OctagonClient(makeInvoker(''), db, audit);
+      const json = JSON.stringify({
+        versions: [{
+          model_probability: 1.6,
+          market_probability: 1.3,
+          outcome_probabilities_json: [
+            { market_ticker: 'KXPRESNOMR-28-TMAS', model_probability: 1.6, market_probability: 1.3 },
+            { market_ticker: 'KXPRESNOMR-28-JDV', model_probability: 37.69, market_probability: 37.0 },
+          ],
+        }],
+      });
+
+      // Mixed-case ticker should still match
+      const report = client.parseReport(json, 'kxpresnomr-28-jdv', 'KXPRESNOMR-28', 'cache');
+      expect(report.modelProb).toBeCloseTo(0.3769, 4);
+      expect(report.marketProb).toBeCloseTo(0.37, 4);
+    });
+
+    test('falls back to event-level probability when ticker not in outcome_probabilities_json', () => {
+      const client = new OctagonClient(makeInvoker(''), db, audit);
+      const json = JSON.stringify({
+        versions: [{
+          model_probability: 55.0,
+          market_probability: 50.0,
+          outcome_probabilities_json: JSON.stringify([
+            { market_ticker: 'OTHER-TICKER', model_probability: 30.0 },
+          ]),
+        }],
+      });
+
+      const report = client.parseReport(json, 'MISSING-TICKER', 'EVENT-1', 'cache');
+      expect(report.modelProb).toBeCloseTo(0.55, 4);  // falls back to event-level
+      expect(report.marketProb).toBeCloseTo(0.50, 4);
+    });
+
     test('handles percentage values (e.g. "72%")', () => {
       const client = new OctagonClient(makeInvoker(''), db, audit);
       const json = JSON.stringify({ modelProb: '72%', marketProb: '65%' });

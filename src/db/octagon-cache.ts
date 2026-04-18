@@ -21,7 +21,7 @@ export interface OctagonReport {
 
 export function insertReport(db: Database, report: OctagonReport): void {
   db.prepare(`
-    INSERT OR REPLACE INTO octagon_reports
+    INSERT INTO octagon_reports
       (report_id, ticker, event_ticker, model_prob, market_prob, mispricing_signal,
        drivers_json, catalysts_json, sources_json, resolution_history_json,
        contract_snapshot_json, raw_response, model_accuracy, variant_used, fetched_at, expires_at)
@@ -29,6 +29,22 @@ export function insertReport(db: Database, report: OctagonReport): void {
       ($report_id, $ticker, $event_ticker, $model_prob, $market_prob, $mispricing_signal,
        $drivers_json, $catalysts_json, $sources_json, $resolution_history_json,
        $contract_snapshot_json, $raw_response, $model_accuracy, $variant_used, $fetched_at, $expires_at)
+    ON CONFLICT(report_id) DO UPDATE SET
+      ticker = EXCLUDED.ticker,
+      event_ticker = EXCLUDED.event_ticker,
+      model_prob = EXCLUDED.model_prob,
+      market_prob = EXCLUDED.market_prob,
+      mispricing_signal = EXCLUDED.mispricing_signal,
+      drivers_json = EXCLUDED.drivers_json,
+      catalysts_json = EXCLUDED.catalysts_json,
+      sources_json = EXCLUDED.sources_json,
+      resolution_history_json = EXCLUDED.resolution_history_json,
+      contract_snapshot_json = EXCLUDED.contract_snapshot_json,
+      raw_response = EXCLUDED.raw_response,
+      model_accuracy = EXCLUDED.model_accuracy,
+      variant_used = EXCLUDED.variant_used,
+      fetched_at = EXCLUDED.fetched_at,
+      expires_at = EXCLUDED.expires_at
   `).run({
     $report_id: report.report_id,
     $ticker: report.ticker,

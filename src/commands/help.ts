@@ -14,11 +14,16 @@ function buildTopics(ctx: HelpContext): Record<string, string> {
 
 ${p}search [theme|ticker|query]  Search events by theme, ticker, or free-text
 ${p}search themes                List all available themes and subcategories
+${p}search edge                  Scan all markets by Octagon model edge
+${p}search edge --min-edge 30    Markets with ≥30pp edge
+${p}search edge --limit 50       Top 50 results
+${p}search edge --category crypto Filter by category
 
 Examples:
   ${p}search crypto
   ${p}search crypto:btc
-  ${p}search "bitcoin price"`,
+  ${p}search "bitcoin price"
+  ${p}search edge --min-edge 30 --category crypto`,
 
     portfolio: `**${p}portfolio** — Account state
 
@@ -88,6 +93,29 @@ Side defaults to YES if omitted.`,
 
 ${p}cancel <order_id>`,
 
+    backtest: `**${p}backtest** — Model accuracy scorecard & edge scanner
+
+${p}backtest                              15-day lookback, both sections (default)
+${p}backtest --days 30                    30-day lookback
+${p}backtest --max-age 14                 Reject predictions older than 14 days (default = --days)
+${p}backtest --resolved                   Resolved markets only
+${p}backtest --unresolved                 Unresolved markets only
+${p}backtest --category crypto            Filter by category
+${p}backtest --min-edge 10                Stricter edge threshold in pp (default 0.5pp)
+${p}backtest --min-volume 10              Per-contract volume gate (default 1)
+${p}backtest --min-price 5 --max-price 95 Tradeable price band 0-100 (defaults: 5 / 95)
+${p}backtest --export results.csv         Per-market detail CSV
+${p}backtest --json                       Machine-readable output
+
+Looks back N days, compares what the model said then to where the market is now.
+Resolved markets: scored against Kalshi settlement (0 or 100).
+Unresolved markets: mark-to-market vs current Kalshi trading price.
+Per-contract entry: mp/kp come from the per-contract outcome_probabilities on the
+Octagon snapshot (no event-level fallback). Volume gate uses per-contract volume
+from the snapshot when available, else current Kalshi lifetime volume.
+ROI is capital-weighted: sum(pnl) / sum(capital) across edge signals, where capital
+is kp/100 for YES edges and (100-kp)/100 for NO edges (matches Supabase methodology).`,
+
     'clear-cache': `**${ctx === 'cli' ? '' : 'bun start '}clear-cache** — Delete local cache
 
 ${ctx === 'cli' ? `${p}` : 'bun start '}clear-cache                Delete the local SQLite database (~/.kalshi-bot/kalshi-bot.db)
@@ -110,7 +138,7 @@ ${p}help <command>             Show detailed help for a command`,
 function buildOverview(ctx: HelpContext): string {
   const p = prefix(ctx);
   if (ctx === 'cli') {
-    return `**Kalshi Deep Trading Bot — CLI Commands**
+    return `**Kalshi Trading Bot CLI — CLI Commands**
 
 Quick start:
   kalshi search crypto          Find markets by keyword or theme
@@ -121,6 +149,7 @@ Discovery:
   search [theme|ticker|query]   Find markets by keyword or theme
   search --refresh <query>      Force index rebuild then search
   search themes                 List all themes and subcategories
+  search edge [--min-edge N]    Scan all markets by Octagon model edge
   watch <ticker>                Live price/orderbook feed
   watch --theme <theme>         Continuous theme scan (Ctrl+C to stop)
   watch --refresh               Force index rebuild before watching
@@ -131,6 +160,11 @@ Analysis & Trading:
   buy <ticker> <n> [price] [yes|no]   Buy contracts (price: cents 1-99 or dollars 0.01-0.99)
   sell <ticker> <n> [price] [yes|no]  Sell contracts
   cancel <order_id>                   Cancel a resting order
+
+Analysis:
+  backtest                      Model accuracy scorecard + live edge scanner
+  backtest --resolved           Resolved markets scorecard only
+  backtest --unresolved         Live edge scanner only
 
 Account:
   portfolio                     Overview: positions, P&L, risk snapshot
@@ -145,10 +179,12 @@ System:
   help [command]                Show help for a command
 
 Flags: --json, --refresh, --performance, --dry-run, --verbose
+Backtest flags: --days, --max-age, --resolved, --unresolved, --category, --min-edge,
+                --min-volume, --min-price, --max-price, --export
 Run "kalshi help <command>" for detailed usage.`;
   }
 
-  return `**Kalshi Deep Trading Bot — Commands**
+  return `**Kalshi Trading Bot CLI — Commands**
 
 Quick start:
   /search crypto          Find markets by keyword or theme
@@ -159,11 +195,13 @@ Discovery:
   /search [theme|ticker|query]   Find markets by keyword or theme
   /search --refresh <query>      Force index rebuild then search
   /search themes                 List all themes and subcategories
+  /search edge [--min-edge N]    Scan all markets by Octagon model edge
   /watch <ticker>                Live price/orderbook feed
   /watch --theme <theme>         Continuous theme scan (Esc to stop)
   /watch --refresh               Force index rebuild before watching
 
-Analysis & Trading:
+Analysis:
+  /backtest                      Model accuracy scorecard + live edge scanner
   /analyze <ticker>              Full report: edge, drivers, Kelly sizing
   /analyze <ticker> refresh      Force fresh Octagon report
   /buy <ticker> <n> [price] [yes|no]   Buy contracts (price: cents 1-99 or dollars 0.01-0.99)

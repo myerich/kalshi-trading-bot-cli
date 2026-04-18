@@ -9,6 +9,18 @@ import {
   formatOrderConfirmation,
 } from './formatters.js';
 import { handleThemes, formatThemesHuman } from './themes.js';
+import type { ParsedArgs, Subcommand } from './parse-args.js';
+
+function defaultArgs(overrides: Partial<ParsedArgs>): ParsedArgs {
+  return {
+    subcommand: 'chat', positionalArgs: [], json: false,
+    live: false, refresh: false, report: false, dryRun: false,
+    verbose: false, performance: false, resolved: false,
+    unresolved: false, parseErrors: [],
+    ...overrides,
+  };
+}
+import { handleBacktest, formatBacktestHuman } from './backtest.js';
 import { handleAnalyze, formatAnalyzeHuman } from './analyze.js';
 import { handlePortfolio, formatPortfolioHuman } from './portfolio.js';
 import { reviewPortfolio, formatReviewHuman } from './review.js';
@@ -25,6 +37,8 @@ export interface CommandResult {
     count: number;
     price: number | undefined;
   };
+  /** If set, run this async function after showing `output` and append the result */
+  asyncFollowUp?: () => Promise<string>;
 }
 
 export async function handleSlashCommand(input: string): Promise<CommandResult | null> {
@@ -66,7 +80,7 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
     // ─── /search themes (inline) ─────────────────────────────────────
     // Note: /search <non-themes> is handled in cli.ts via browseController
     case 'themes': {
-      const resp = await handleThemes({ subcommand: 'themes', positionalArgs: [], json: false, live: false, refresh: false, report: false, dryRun: false, verbose: false, performance: false, parseErrors: [] });
+      const resp = await handleThemes(defaultArgs({ subcommand: 'themes' }));
       return { output: formatThemesHuman(resp.data) };
     }
 
@@ -77,6 +91,38 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
     // ─── /review ─────────────────────────────────────────────────────
     case 'review':
       return handleReviewCommand();
+
+    // ─── /backtest ───────────────────────────────────────────────────
+    case 'backtest': {
+      // Parse backtest-specific flags from slash command args
+      const btArgs: Partial<ParsedArgs> = { subcommand: 'backtest' };
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--resolved') btArgs.resolved = true;
+        else if (a === '--unresolved') btArgs.unresolved = true;
+        else if (a === '--category') btArgs.category = args[++i];
+        else if (a === '--days') { const v = Number(args[++i]); if (Number.isFinite(v) && v > 0) btArgs.days = v; }
+        else if (a === '--max-age') { const v = Number(args[++i]); if (Number.isFinite(v) && v > 0) btArgs.maxAge = v; }
+        else if (a === '--min-edge') { const v = Number(args[++i]?.replace('%', '')); if (Number.isFinite(v)) btArgs.minEdge = v / 100; }
+        else if (a === '--min-volume') { const v = Number(args[++i]); if (Number.isFinite(v) && v >= 0) btArgs.minVolume = v; }
+        else if (a === '--min-price') { const v = Number(args[++i]); if (Number.isFinite(v) && v >= 0 && v <= 100) btArgs.minPrice = v; }
+        else if (a === '--max-price') { const v = Number(args[++i]); if (Number.isFinite(v) && v >= 0 && v <= 100) btArgs.maxPrice = v; }
+        else if (a === '--export') { const v = args[++i]; if (v) btArgs.exportPath = v; }
+      }
+      const mode = btArgs.resolved ? 'resolved markets' : btArgs.unresolved ? 'open markets' : 'resolved + open markets';
+      const daysLabel = btArgs.days ?? 15;
+      return {
+        output: `Running ${daysLabel}-day backtest on ${mode}...`,
+        asyncFollowUp: async () => {
+          const resp = await handleBacktest(defaultArgs(btArgs));
+          if (!resp.ok || !resp.data) return resp.error?.message ?? 'Backtest failed';
+          const text = formatBacktestHuman(resp.data, { minEdge: btArgs.minEdge ?? 0.005 });
+          return btArgs.exportPath
+            ? `${text}\n\nExported per-market detail to ${btArgs.exportPath}`
+            : text;
+        },
+      };
+    }
 
     case 'config':
       // Fall through to agent — better handled by the LLM
@@ -152,10 +198,7 @@ async function handlePortfolioSlash(subview?: string): Promise<CommandResult> {
     }
 
     // Default: full portfolio overview
-    const resp = await handlePortfolio({
-      subcommand: 'portfolio', positionalArgs: [], json: false,
-      live: false, refresh: false, report: false, dryRun: false, verbose: false, performance: false, parseErrors: [],
-    });
+    const resp = await handlePortfolio(defaultArgs({ subcommand: 'portfolio' }));
     return { output: formatPortfolioHuman(resp.data) };
   } catch (err) {
     return { output: `Portfolio error: ${err instanceof Error ? err.message : String(err)}` };

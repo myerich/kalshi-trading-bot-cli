@@ -10,6 +10,7 @@ import { handleAlerts, formatAlertsHuman } from './alerts.js';
 import { handleStatus } from './status.js';
 import { handleThemes, formatThemesHuman } from './themes.js';
 import { handleWatch } from './watch.js';
+import { handleBacktest, formatBacktestHuman } from './backtest.js';
 import { callKalshiApi, buildOrderPriceCount } from '../tools/kalshi/api.js';
 import {
   formatBalance,
@@ -21,6 +22,7 @@ import { buildHelp, validateTradeArgs } from './help.js';
 import { fetchMarket, fetchMarketQuote } from './helpers.js';
 import { ensureIndex, forceRefreshIndex } from '../tools/kalshi/search-index.js';
 import { searchEventIndex } from '../db/event-index.js';
+import { scanEdges, formatEdgeScanHuman } from './search-edge.js';
 import type { KalshiBalanceResponse } from './formatters.js';
 import { ExitCode, exitCodeFromError } from '../utils/errors.js';
 
@@ -80,6 +82,18 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
           console.log(formatThemesHuman(resp.data));
         }
         process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
+        return;
+      }
+      if (sub === 'edge') {
+        const db = (await import('../db/index.js')).getDb();
+        const minEdgePp = (args.minEdge ?? 0.05) * 100;
+        const result = scanEdges(db, { minEdgePp, limit: args.limit, category: args.category });
+        if (json) {
+          console.log(JSON.stringify(wrapSuccess('search', result)));
+        } else {
+          console.log(formatEdgeScanHuman(result, minEdgePp));
+        }
+        process.exit(ExitCode.SUCCESS);
         return;
       }
       if (!sub) {
@@ -227,6 +241,22 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
       }
       // Theme scan mode (existing behavior)
       await handleWatch(args);
+      return;
+    }
+
+    // ─── backtest ──────────────────────────────────────────────────────
+    if (resolved.canonical === 'backtest') {
+      const resp = await handleBacktest(args);
+      if (json) {
+        console.log(JSON.stringify(resp));
+      } else if (resp.ok && resp.data) {
+        console.log(formatBacktestHuman(resp.data, {
+          minEdge: args.minEdge ?? 0.005,
+        }));
+      } else {
+        console.error(resp.error?.message ?? 'Backtest failed');
+      }
+      process.exit(resp.ok ? ExitCode.SUCCESS : ExitCode.USER_ERROR);
       return;
     }
 
