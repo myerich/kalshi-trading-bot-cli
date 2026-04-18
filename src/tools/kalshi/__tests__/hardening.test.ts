@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { toDollarString, fromDollarString, KalshiApiError, callKalshiApi } from '../api.js';
+import { toDollarString, fromDollarString, priceCentsToDollarString, supportsFractional, KalshiApiError, callKalshiApi } from '../api.js';
+import type { KalshiMarket } from '../types.js';
 import { auditTrail } from '../../../audit/index.js';
 import { dlqWriter } from '../dlq.js';
 
@@ -86,6 +87,38 @@ describe('Dollar conversion', () => {
     for (let cents = 0; cents <= 100; cents++) {
       expect(fromDollarString(toDollarString(cents))).toBe(cents);
     }
+  });
+});
+
+describe('priceCentsToDollarString (subpenny-aware)', () => {
+  it('serializes whole cents with 4 decimals', () => {
+    expect(priceCentsToDollarString(1)).toBe('0.0100');
+    expect(priceCentsToDollarString(56)).toBe('0.5600');
+    expect(priceCentsToDollarString(99)).toBe('0.9900');
+  });
+
+  it('preserves subpenny precision (fractional cents)', () => {
+    expect(priceCentsToDollarString(56.5)).toBe('0.5650');
+    expect(priceCentsToDollarString(56.25)).toBe('0.5625');
+    expect(priceCentsToDollarString(0.1)).toBe('0.0010');
+  });
+});
+
+describe('supportsFractional', () => {
+  const base = (overrides: Partial<KalshiMarket>): KalshiMarket => ({
+    ticker: 'T', tick_size: 1, supports_fractional: false,
+  } as KalshiMarket & typeof overrides) as unknown as KalshiMarket;
+
+  it('returns true when supports_fractional=true', () => {
+    expect(supportsFractional({ ...base({}), supports_fractional: true } as KalshiMarket)).toBe(true);
+  });
+
+  it('returns true when tick_size < 1', () => {
+    expect(supportsFractional({ ...base({}), tick_size: 0.01 } as KalshiMarket)).toBe(true);
+  });
+
+  it('returns false for standard markets', () => {
+    expect(supportsFractional({ ...base({}), tick_size: 1, supports_fractional: false } as KalshiMarket)).toBe(false);
   });
 });
 

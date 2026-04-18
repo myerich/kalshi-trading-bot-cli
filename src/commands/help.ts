@@ -242,7 +242,11 @@ export function validateTradeArgs(
     if (!Number.isFinite(dollars) || dollars <= 0 || dollars >= 1) {
       return { error: `Invalid price: ${priceStr}. Dollar prices must be between 0.0001 and 0.9999 (e.g. 0.56 or 0.5650).` };
     }
-    return { count, price: dollars * 100 };
+    // Snap away FP noise so "0.56" round-trips to exactly 56, while subpenny like "0.5650" stays 56.5.
+    const raw = dollars * 100;
+    const nearest = Math.round(raw);
+    const price = Math.abs(raw - nearest) < 1e-9 ? nearest : raw;
+    return { count, price };
   }
 
   return { error: `Invalid price: ${priceStr}. Use 1-99 (cents) or 0.01-0.99 (dollars, e.g. 0.56 or 0.5650).` };

@@ -221,6 +221,50 @@ describe('Kelly Sizing', () => {
     expect(result.contracts).toBe(0);
     expect(result.skippedReason).toContain('threshold');
   });
+
+  test('preserves fractional entry price on subpenny markets', async () => {
+    setMockBankroll(100000, 0, []);
+
+    // tick_size < 1 → subpenny; quote at $0.5625 (56.25¢) should not round to 56.
+    const market = makeMarket({
+      tick_size: 0.01,
+      supports_fractional: true,
+      yes_bid: 55,
+      yes_ask: 57,
+      yes_bid_dollars: '0.5550',
+      yes_ask_dollars: '0.5625',
+    });
+
+    // Lower the min-edge threshold — the executable edge here is only ~3.75%
+    // (bid/ask haircut eats half of raw 10% edge). We just care that entry
+    // price precision is preserved.
+    const result = await kellySize({ edge: 0.10, marketProb: 0.50, market, minEdgeThreshold: 0.01 });
+
+    // entryPriceCents should retain fractional precision from the 0.5625 ask
+    expect(result.entryPriceCents).toBeCloseTo(56.25, 4);
+    expect(Number.isInteger(result.entryPriceCents)).toBe(false);
+    expect(result.contracts).toBeGreaterThan(0);
+  });
+
+  test('rounds contracts to tick_size on fractional-enabled markets', async () => {
+    setMockBankroll(100000, 0, []);
+
+    // tick_size 0.1 = fractional contracts in 0.1 increments
+    const market = makeMarket({
+      tick_size: 0.1,
+      supports_fractional: true,
+      yes_bid: 48,
+      yes_ask: 50,
+      yes_bid_dollars: '0.48',
+      yes_ask_dollars: '0.50',
+    });
+
+    const result = await kellySize({ edge: 0.10, marketProb: 0.50, market, minEdgeThreshold: 0.01 });
+
+    // contracts should be a multiple of tick_size (0.1) — mod check with tolerance
+    const mod = Math.abs((result.contracts / 0.1) - Math.round(result.contracts / 0.1));
+    expect(mod).toBeLessThan(1e-6);
+  });
 });
 
 describe('Risk Gate', () => {
