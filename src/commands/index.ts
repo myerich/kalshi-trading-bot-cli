@@ -1,12 +1,9 @@
 import { callKalshiApi, buildOrderPriceCount } from '../tools/kalshi/api.js';
-import type { KalshiOrder, KalshiPosition } from '../tools/kalshi/types.js';
-import type { KalshiBalanceResponse } from './formatters.js';
 import {
   formatBalance,
   formatPositions,
   formatOrders,
   formatExchangeStatus,
-  formatOrderConfirmation,
 } from './formatters.js';
 import { handleThemes, formatThemesHuman } from './themes.js';
 import type { ParsedArgs, Subcommand } from './parse-args.js';
@@ -24,19 +21,12 @@ import { handleBacktest, formatBacktestHuman } from './backtest.js';
 import { handleAnalyze, formatAnalyzeHuman } from './analyze.js';
 import { handlePortfolio, formatPortfolioHuman } from './portfolio.js';
 import { reviewPortfolio, formatReviewHuman } from './review.js';
-import { buildHelp, validateTradeArgs } from './help.js';
-import { fetchMarket, fetchMarketQuote } from './helpers.js';
+import { handleConfig, formatConfigHuman } from './config.js';
+import { buildHelp } from './help.js';
+import { fetchMarket, fetchMarketQuote, fetchOpenPositions, fetchRestingOrders, fetchBalance, parseTradeArgs } from './helpers.js';
 
 export interface CommandResult {
   output: string;
-  /** If set, show this as a pending trade requiring approval */
-  pendingTrade?: {
-    ticker: string;
-    action: 'buy' | 'sell';
-    side: 'yes' | 'no';
-    count: number;
-    price: number | undefined;
-  };
   /** If set, run this async function after showing `output` and append the result */
   asyncFollowUp?: () => Promise<string>;
 }
@@ -124,46 +114,20 @@ export async function handleSlashCommand(input: string): Promise<CommandResult |
       };
     }
 
-    case 'config':
-      // Fall through to agent — better handled by the LLM
-      return null;
+    case 'config': {
+      const resp = await handleConfig(defaultArgs({ subcommand: 'config', positionalArgs: args }));
+      if (!resp.ok) {
+        const errMsg = (resp as { error?: { message?: string } }).error?.message ?? 'Config error';
+        return { output: errMsg };
+      }
+      return { output: formatConfigHuman(resp.data) };
+    }
 
     default:
       return null;
   }
 }
 
-export async function executePendingTrade(trade: NonNullable<CommandResult['pendingTrade']>): Promise<string> {
-  let effectivePrice = trade.price;
-  let market;
-  if (effectivePrice === undefined) {
-    const quoteResult = await fetchMarketQuote(trade.ticker, trade.action, trade.side);
-    if ('error' in quoteResult) return quoteResult.error;
-    effectivePrice = quoteResult.cents;
-    market = quoteResult.market;
-  } else {
-    market = await fetchMarket(trade.ticker);
-  }
-  const body: Record<string, unknown> = {
-    ticker: trade.ticker,
-    action: trade.action,
-    side: trade.side,
-    type: 'limit',
-    ...buildOrderPriceCount({
-      side: trade.side,
-      count: trade.count,
-      priceCents: effectivePrice,
-      market,
-    }),
-  };
-
-  const data = await callKalshiApi('POST', '/portfolio/orders', { body });
-  const order = data.order as Record<string, unknown> | undefined;
-  if (order) {
-    return `Order placed. ID: ${order.order_id} | Status: ${order.status}`;
-  }
-  return `Order submitted. Response: ${JSON.stringify(data)}`;
-}
 
 // ─── Portfolio subview handler ──────────────────────────────────────────────
 
@@ -172,24 +136,17 @@ async function handlePortfolioSlash(subview?: string): Promise<CommandResult> {
 
   try {
     if (view === 'positions') {
-      const data = await callKalshiApi('GET', '/portfolio/positions', {
-        params: { count_filter: 'position' },
-      });
-      const allPositions = (data.market_positions ?? []) as KalshiPosition[];
-      // Belt-and-suspenders: guard against Kalshi ever returning a closed row
-      // (position_fp === "0.00") despite count_filter=position.
-      const positions = allPositions.filter((p) => parseFloat(p.position_fp) !== 0);
+      const positions = await fetchOpenPositions();
       return { output: formatPositions(positions) };
     }
 
     if (view === 'orders') {
-      const data = await callKalshiApi('GET', '/portfolio/orders', { params: { status: 'resting' } });
-      const orders = (data.orders ?? []) as KalshiOrder[];
+      const orders = await fetchRestingOrders();
       return { output: formatOrders(orders) };
     }
 
     if (view === 'balance') {
-      const data = await callKalshiApi('GET', '/portfolio/balance') as unknown as KalshiBalanceResponse;
+      const data = await fetchBalance();
       return { output: formatBalance(data) };
     }
 
@@ -222,49 +179,45 @@ async function handleAnalyzeCommand(args: string[]): Promise<CommandResult> {
 
 // ─── Trade command ──────────────────────────────────────────────────────────
 
-function parseSide(val: string | undefined): 'yes' | 'no' | null {
-  const v = val?.toLowerCase();
-  if (v === 'yes' || v === 'y') return 'yes';
-  if (v === 'no' || v === 'n') return 'no';
-  return null;
-}
+async function handleTradeCommand(action: 'buy' | 'sell', args: string[]): Promise<CommandResult> {
+  const parsed = parseTradeArgs(args);
+  if ('error' in parsed) return { output: parsed.error };
 
-function handleTradeCommand(action: 'buy' | 'sell', args: string[]): CommandResult {
-  const [ticker, countStr, ...rest] = args;
-
-  if (!ticker || !countStr) {
-    return { output: `Usage: /${action} <ticker> <count> [price] [yes|no]  (price: 1-99 cents or 0.01-0.99 dollars)` };
-  }
-
-  // Extract side and price from remaining args: [price] [side], [side], or nothing
-  let side: 'yes' | 'no' = 'yes';
-  let priceArg: string | undefined;
-
-  if (rest.length >= 2) {
-    // e.g. /buy TICKER 10 50 no
-    priceArg = rest[0];
-    side = parseSide(rest[1]) ?? 'yes';
-  } else if (rest.length === 1) {
-    // Could be price or side: /buy TICKER 10 50  OR  /buy TICKER 10 no
-    const asSide = parseSide(rest[0]);
-    if (asSide) {
-      side = asSide;
+  try {
+    let effectivePrice = parsed.price;
+    let market;
+    if (effectivePrice === undefined) {
+      const quoteResult = await fetchMarketQuote(parsed.ticker, action, parsed.side);
+      if ('error' in quoteResult) return { output: quoteResult.error };
+      effectivePrice = quoteResult.cents;
+      market = quoteResult.market;
     } else {
-      priceArg = rest[0];
+      market = await fetchMarket(parsed.ticker);
     }
+
+    const body: Record<string, unknown> = {
+      ticker: parsed.ticker,
+      action,
+      side: parsed.side,
+      type: 'limit',
+      ...buildOrderPriceCount({
+        side: parsed.side,
+        count: parsed.count,
+        priceCents: effectivePrice,
+        market,
+      }),
+    };
+
+    const data = await callKalshiApi('POST', '/portfolio/orders', { body });
+    const order = data.order as Record<string, unknown> | undefined;
+    return {
+      output: order
+        ? `Order placed. ID: ${order.order_id} | Status: ${order.status}`
+        : `Order submitted. Response: ${JSON.stringify(data)}`,
+    };
+  } catch (err) {
+    return { output: `${action} failed: ${err instanceof Error ? err.message : String(err)}` };
   }
-
-  const validated = validateTradeArgs(countStr, priceArg);
-  if ('error' in validated) {
-    return { output: validated.error };
-  }
-
-  const pendingTrade = { ticker: ticker.toUpperCase(), action, side, count: validated.count, price: validated.price };
-
-  return {
-    output: formatOrderConfirmation(ticker.toUpperCase(), action, side, validated.count, validated.price),
-    pendingTrade,
-  };
 }
 
 async function handleReviewCommand(): Promise<CommandResult> {

@@ -1,9 +1,8 @@
-import { callKalshiApi } from '../tools/kalshi/api.js';
-import type { KalshiPosition } from '../tools/kalshi/types.js';
 import { handleAnalyze } from './analyze.js';
 import type { AnalyzeData } from './analyze.js';
 import { parsePriceField } from '../controllers/browse.js';
 import { formatBoxHeader } from './formatters.js';
+import { fetchOpenPositions } from './helpers.js';
 
 export interface PositionReview {
   ticker: string;
@@ -27,12 +26,7 @@ const SELL_THRESHOLD = 0.03; // minimum edge reversal to trigger SELL signal
  * run edge analysis on each, and return HOLD/SELL recommendations.
  */
 export async function reviewPortfolio(): Promise<PositionReview[]> {
-  const data = await callKalshiApi('GET', '/portfolio/positions', {
-    params: { count_filter: 'position' },
-  });
-  const allPositions = (data.market_positions ?? []) as KalshiPosition[];
-
-  const nonZero = allPositions.filter((p) => parseFloat(p.position_fp) !== 0);
+  const nonZero = await fetchOpenPositions();
 
   if (nonZero.length === 0) return [];
 

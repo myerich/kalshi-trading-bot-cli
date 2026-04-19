@@ -82,6 +82,8 @@ Type help for commands, or just ask a question.
 | `cancel <order_id>` | Cancel a resting order |
 | `backtest` | Model accuracy scorecard + live edge scanner |
 | `portfolio` | Positions, P&L, risk snapshot |
+| `review` | Close recommendations on open positions |
+| `config [key] [value]` | View or change bot settings |
 | `setup` | Re-run setup wizard (inside TUI) |
 | `init` | Launch setup wizard from CLI (`bun start init`) |
 | `clear-cache` | Delete local cache and rebuild (`bun start clear-cache`) |

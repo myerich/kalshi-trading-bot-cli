@@ -7,6 +7,8 @@ const SUBCOMMANDS = [
   'alerts', 'config', 'clear-cache', 'chat', 'init', 'status', 'themes',
   // Backtest
   'backtest',
+  // Review
+  'review',
 ] as const;
 
 export type Subcommand = (typeof SUBCOMMANDS)[number];

@@ -466,38 +466,21 @@ describe('Kalshi Integration Tests', () => {
       const result = await handleSlashCommand('/buy');
       expect(result).not.toBeNull();
       expect(result!.output).toContain('Usage');
-      expect(result!.pendingTrade).toBeUndefined();
       console.log('  /buy (no args) shows usage');
     });
 
-    test('/buy with args returns order preview (no execution)', async () => {
-      const result = await handleSlashCommand('/buy FAKE-TICKER 1 50');
-      expect(result).not.toBeNull();
-      expect(result!.output).toContain('Order Preview');
-      expect(result!.output).toContain('FAKE-TICKER');
-      expect(result!.pendingTrade).toBeDefined();
-      expect(result!.pendingTrade!.action).toBe('buy');
-      expect(result!.pendingTrade!.count).toBe(1);
-      expect(result!.pendingTrade!.price).toBe(50);
-      console.log('  /buy preview OK (not executed)');
-    });
-
-    test('/sell with args returns order preview (no execution)', async () => {
-      const result = await handleSlashCommand('/sell FAKE-TICKER 3 75');
-      expect(result).not.toBeNull();
-      expect(result!.output).toContain('Order Preview');
-      expect(result!.pendingTrade!.action).toBe('sell');
-      expect(result!.pendingTrade!.count).toBe(3);
-      expect(result!.pendingTrade!.price).toBe(75);
-      console.log('  /sell preview OK (not executed)');
-    });
-
-    test('/buy with invalid price rejects', async () => {
+    test('/buy with invalid price rejects before API call', async () => {
       const result = await handleSlashCommand('/buy FAKE-TICKER 1 150');
       expect(result).not.toBeNull();
       expect(result!.output).toContain('Invalid price');
-      expect(result!.pendingTrade).toBeUndefined();
       console.log('  /buy invalid price rejected');
+    });
+
+    test('/sell with invalid count rejects before API call', async () => {
+      const result = await handleSlashCommand('/sell FAKE-TICKER abc 50');
+      expect(result).not.toBeNull();
+      expect(result!.output.toLowerCase()).toMatch(/invalid|count/);
+      console.log('  /sell invalid count rejected');
     });
 
     test('/cancel without args returns usage', async () => {

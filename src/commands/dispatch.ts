@@ -17,13 +17,11 @@ import {
   formatPositions,
   formatOrders,
 } from './formatters.js';
-import type { KalshiOrder, KalshiPosition } from '../tools/kalshi/types.js';
-import { buildHelp, validateTradeArgs } from './help.js';
-import { fetchMarket, fetchMarketQuote } from './helpers.js';
+import { buildHelp } from './help.js';
+import { fetchMarket, fetchMarketQuote, fetchOpenPositions, fetchRestingOrders, fetchBalance, parseTradeArgs } from './helpers.js';
 import { ensureIndex, forceRefreshIndex } from '../tools/kalshi/search-index.js';
 import { searchEventIndex } from '../db/event-index.js';
 import { scanEdges, formatEdgeScanHuman } from './search-edge.js';
-import type { KalshiBalanceResponse } from './formatters.js';
 import { ExitCode, exitCodeFromError } from '../utils/errors.js';
 
 // ─── Alias resolution ────────────────────────────────────────────────────────
@@ -31,15 +29,11 @@ import { ExitCode, exitCodeFromError } from '../utils/errors.js';
 
 interface ResolvedCommand {
   canonical: Subcommand;
-  mode?: string;
   subview?: string;
 }
 
-function resolveAlias(subcommand: Subcommand, positionalArgs: string[]): ResolvedCommand {
+function resolveAlias(subcommand: Subcommand): ResolvedCommand {
   switch (subcommand) {
-    // Legacy analysis aliases → analyze
-    case 'edge':
-      return { canonical: 'edge', mode: 'edge-only' };
     // Legacy account aliases → portfolio
     case 'status':
       return { canonical: 'portfolio', subview: 'status' };
@@ -55,7 +49,7 @@ function resolveAlias(subcommand: Subcommand, positionalArgs: string[]): Resolve
 
 export async function dispatch(args: ParsedArgs): Promise<void> {
   const { subcommand, json } = args;
-  const resolved = resolveAlias(subcommand, args.positionalArgs);
+  const resolved = resolveAlias(subcommand);
 
   try {
     // ─── reject invalid flags early (for all commands) ───────────────
@@ -138,11 +132,7 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
       const subview = resolved.subview ?? args.positionalArgs[0] ?? 'overview';
 
       if (subview === 'positions') {
-        const data = await callKalshiApi('GET', '/portfolio/positions', {
-          params: { count_filter: 'position' },
-        });
-        const allPositions = (data.market_positions ?? []) as KalshiPosition[];
-        const positions = allPositions.filter((p) => parseFloat(p.position_fp) !== 0);
+        const positions = await fetchOpenPositions();
         if (json) {
           console.log(JSON.stringify(wrapSuccess('portfolio:positions', { positions })));
         } else {
@@ -152,8 +142,7 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
       }
 
       if (subview === 'orders') {
-        const data = await callKalshiApi('GET', '/portfolio/orders', { params: { status: 'resting' } });
-        const orders = (data.orders ?? []) as KalshiOrder[];
+        const orders = await fetchRestingOrders();
         if (json) {
           console.log(JSON.stringify(wrapSuccess('portfolio:orders', { orders })));
         } else {
@@ -163,7 +152,7 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
       }
 
       if (subview === 'balance') {
-        const data = await callKalshiApi('GET', '/portfolio/balance') as unknown as KalshiBalanceResponse;
+        const data = await fetchBalance();
         if (json) {
           console.log(JSON.stringify(wrapSuccess('portfolio:balance', data)));
         } else {
@@ -259,41 +248,38 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
       return;
     }
 
+    // ─── review ────────────────────────────────────────────────────────
+    if (resolved.canonical === 'review') {
+      const { reviewPortfolio, formatReviewHuman } = await import('./review.js');
+      const reviews = await reviewPortfolio();
+      if (json) {
+        console.log(JSON.stringify(wrapSuccess('review', { reviews })));
+      } else {
+        console.log(formatReviewHuman(reviews));
+      }
+      return;
+    }
+
     // ─── buy / sell ────────────────────────────────────────────────────
     if (subcommand === 'buy' || subcommand === 'sell') {
-      const [ticker, countStr, priceStr] = args.positionalArgs;
-      if (!ticker || !countStr) {
-        const usage = `Usage: ${subcommand} <ticker> <count> [price] [--side yes|no]  (price: 1-99 cents or 0.01-0.99 dollars)`;
-        const errResp = wrapError(subcommand, 'MISSING_ARGS', usage);
+      const parsed = parseTradeArgs(args.positionalArgs, args.side);
+      if ('error' in parsed) {
+        const errResp = wrapError(subcommand, 'INVALID_ARGS', parsed.error);
         if (json) {
           console.log(JSON.stringify(errResp));
           process.exit(ExitCode.USER_ERROR);
         } else {
-          console.error(usage);
+          console.error(parsed.error);
           process.exit(ExitCode.USER_ERROR);
         }
         return;
       }
-      const validated = validateTradeArgs(countStr, priceStr);
-      if ('error' in validated) {
-        const errResp = wrapError(subcommand, 'INVALID_ARGS', validated.error);
-        if (json) {
-          console.log(JSON.stringify(errResp));
-          process.exit(ExitCode.USER_ERROR);
-        } else {
-          console.error(validated.error);
-          process.exit(ExitCode.USER_ERROR);
-        }
-        return;
-      }
-      let effectivePrice = validated.price;
-      const tradeSide = args.side ?? 'yes';
-      const tickerUpper = ticker.toUpperCase();
+      let effectivePrice = parsed.price;
 
       // Fetch market once — used both for quote (if needed) and order validation.
       let market;
       if (effectivePrice === undefined) {
-        const quoteResult = await fetchMarketQuote(tickerUpper, subcommand as 'buy' | 'sell', tradeSide);
+        const quoteResult = await fetchMarketQuote(parsed.ticker, subcommand as 'buy' | 'sell', parsed.side);
         if ('error' in quoteResult) {
           if (json) {
             console.log(JSON.stringify(wrapError(subcommand, 'NO_QUOTE', quoteResult.error)));
@@ -307,17 +293,17 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
         effectivePrice = quoteResult.cents;
         market = quoteResult.market;
       } else {
-        market = await fetchMarket(tickerUpper);
+        market = await fetchMarket(parsed.ticker);
       }
 
       const body: Record<string, unknown> = {
-        ticker: tickerUpper,
+        ticker: parsed.ticker,
         action: subcommand,
-        side: tradeSide,
+        side: parsed.side,
         type: 'limit',
         ...buildOrderPriceCount({
-          side: tradeSide,
-          count: validated.count,
+          side: parsed.side,
+          count: parsed.count,
           priceCents: effectivePrice,
           market,
         }),

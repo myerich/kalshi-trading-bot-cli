@@ -30,8 +30,7 @@ import {
   createProviderSelector,
 } from './components/index.js';
 import { editorTheme, theme } from './theme.js';
-import { handleSlashCommand, executePendingTrade } from './commands/index.js';
-import type { CommandResult } from './commands/index.js';
+import { handleSlashCommand } from './commands/index.js';
 import { formatResponse } from './utils/markdown-table.js';
 import { ensureIndex, onIndexProgress, getRefreshPromise } from './tools/kalshi/search-index.js';
 import { callKalshiApi } from './tools/kalshi/api.js';
@@ -181,7 +180,6 @@ export async function runCli(options?: { forceSetup?: boolean }) {
   const chatLog = new ChatLogComponent(tui);
   const inputHistory = new InputHistoryController(() => tui.requestRender());
   let lastError: string | null = null;
-  let pendingTrade: CommandResult['pendingTrade'] | null = null;
 
   const onError = (message: string) => {
     lastError = message;
@@ -333,23 +331,6 @@ export async function runCli(options?: { forceSetup?: boolean }) {
     return results.length > 0 ? results : null;
   };
 
-  const watchSubcommands = (typed: string): AutocompleteItem[] | null => {
-    const themeFlag = { value: '--theme', label: '--theme', description: 'Continuous theme scan (e.g. --theme crypto)' };
-    if (!typed) return [{ value: '', label: '<ticker>', description: 'Live price/orderbook feed (e.g. KXBTC-26MAR14-T50049)' }, themeFlag];
-    const lower = typed.toLowerCase();
-    // After --theme, complete with theme names
-    if (lower.startsWith('--theme ')) {
-      const themeTyped = typed.slice('--theme '.length);
-      const themeLower = themeTyped.toLowerCase();
-      const results = allThemes
-        .map((t) => ({ value: `--theme ${t.value}`, label: t.label, description: `Scan theme: ${t.value}` }))
-        .filter((t) => !themeLower || t.label.toLowerCase().startsWith(themeLower));
-      return results.length > 0 ? results : null;
-    }
-    if ('--theme'.startsWith(lower)) return [themeFlag];
-    return null;
-  };
-
   const helpTopicCompletions = (typed: string): AutocompleteItem[] | null => {
     const topics = [
       { value: 'search', label: 'search', description: 'Discovery commands' },
@@ -360,6 +341,8 @@ export async function runCli(options?: { forceSetup?: boolean }) {
       { value: 'sell', label: 'sell', description: 'Sell contracts' },
       { value: 'cancel', label: 'cancel', description: 'Cancel an order' },
       { value: 'backtest', label: 'backtest', description: 'Model accuracy & edge scanner' },
+      { value: 'review', label: 'review', description: 'Close recommendations on open positions' },
+      { value: 'config', label: 'config', description: 'View or change bot settings' },
       { value: 'help', label: 'help', description: 'Show help' },
       { value: 'setup', label: 'setup', description: 'Re-run setup wizard' },
     ];
@@ -373,7 +356,6 @@ export async function runCli(options?: { forceSetup?: boolean }) {
     { name: 'search', description: 'Search events by theme, ticker, or free-text (use "themes" to list)', getArgumentCompletions: searchSubcommands },
     { name: 'portfolio', description: 'Portfolio overview, positions, orders, balance, status', getArgumentCompletions: portfolioSubcommands },
     { name: 'analyze', description: 'Full market analysis: edge, research, Kelly sizing', getArgumentCompletions: usageHint('<ticker>', 'e.g. KXBTC-26MAR14-T50049') },
-    { name: 'watch', description: 'Live monitoring: ticker feed or continuous theme scan', getArgumentCompletions: watchSubcommands },
     { name: 'buy', description: 'Buy contracts (defaults to YES side)', getArgumentCompletions: usageHint('<ticker> <count> [price] [yes|no]', 'e.g. KXBTC-26MAR14-T50049 10 56') },
     { name: 'sell', description: 'Sell contracts (defaults to YES side)', getArgumentCompletions: usageHint('<ticker> <count> [price] [yes|no]', 'e.g. KXBTC-26MAR14-T50049 10 56') },
     { name: 'cancel', description: 'Cancel a resting order', getArgumentCompletions: usageHint('<order_id>', 'the order UUID') },
@@ -393,6 +375,10 @@ export async function runCli(options?: { forceSetup?: boolean }) {
       const lower = typed.toLowerCase();
       return opts.filter(o => o.value.toLowerCase().includes(lower));
     }},
+    // Analysis
+    { name: 'review', description: 'Close recommendations on open positions' },
+    // Settings
+    { name: 'config', description: 'View or change bot settings', getArgumentCompletions: usageHint('[key] [value]', 'e.g. watch.min_interval_minutes 20') },
     // Utility
     { name: 'help', description: 'Show help (/help <command> for details)', getArgumentCompletions: helpTopicCompletions },
     { name: 'model', description: 'Change LLM model/provider', getArgumentCompletions: usageHint('<provider:model>', 'e.g. anthropic:sonnet') },
@@ -493,31 +479,6 @@ export async function runCli(options?: { forceSetup?: boolean }) {
       return;
     }
 
-    // Handle pending trade confirmation (yes/no)
-    if (pendingTrade) {
-      const answer = query.trim().toLowerCase();
-      if (answer === 'y' || answer === 'yes') {
-        chatLog.addQuery(query);
-        chatLog.resetToolGrouping();
-        try {
-          const result = await executePendingTrade(pendingTrade);
-          chatLog.finalizeAnswer(result);
-        } catch (err) {
-          chatLog.finalizeAnswer(`Error: ${err instanceof Error ? err.message : String(err)}`);
-        }
-        pendingTrade = null;
-        tui.requestRender();
-        return;
-      } else {
-        chatLog.addQuery(query);
-        chatLog.resetToolGrouping();
-        chatLog.finalizeAnswer('Order canceled.');
-        pendingTrade = null;
-        tui.requestRender();
-        return;
-      }
-    }
-
     // Handle slash commands
     if (query.startsWith('/')) {
       chatLog.addQuery(query);
@@ -546,14 +507,6 @@ export async function runCli(options?: { forceSetup?: boolean }) {
           }
 
           workingIndicator.setState({ status: 'idle' });
-          if (cmdResult.pendingTrade) {
-            pendingTrade = cmdResult.pendingTrade;
-            chatLog.finalizeAnswer(
-              formatResponse(
-                `\n**Confirm order?** Type **yes** to submit or **no** to cancel.`
-              )
-            );
-          }
           tui.requestRender();
           return;
         }

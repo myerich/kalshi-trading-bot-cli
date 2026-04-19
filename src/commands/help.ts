@@ -46,21 +46,26 @@ Legacy aliases (still work):
   ${p}edge [--ticker X]          Edge history / snapshots (default: last 24h)
   ${p}edge --since <date>        Edges since date (e.g. 2026-03-01)` : ''}`,
 
-    watch: `**${p}watch** — Live monitoring
+    watch: ctx === 'cli' ? `**${p}watch** — Live monitoring
 
 Modes:
   ${p}watch <ticker>               Per-ticker price/orderbook feed (5s default)
-  ${p}watch --theme <theme>        Continuous theme scan${ctx === 'cli' ? ' (default: every 60m)' : ' (press Esc to stop)'}
-${ctx === 'cli' ? `
+  ${p}watch --theme <theme>        Continuous theme scan (default: every 60m)
+
 Flags:
   --interval <minutes>              Scan interval for theme mode (min 15)
   --live                            Force 15m interval
   --json                            NDJSON output (one line per tick/cycle)
   --dry-run                         Scan without persisting edges
 
-Press Ctrl+C to stop.` : `
-Per-ticker mode shows live price, bid/ask, spread, volume, and top-5 orderbook.
-Theme mode runs recurring Octagon scans and displays an edge table.`}`,
+Press Ctrl+C to stop.` : `**watch** — Terminal-only command
+
+watch uses screen clearing and a loop, so it runs as a CLI command only:
+
+  bun start watch <ticker>              Per-ticker price/orderbook feed
+  bun start watch --theme <theme>       Continuous theme scan
+
+Run it in a separate terminal. There is no in-TUI equivalent.`,
 
     buy: `**${p}buy** — Buy contracts
 
@@ -128,6 +133,22 @@ Use this when the local cache is corrupted or you want to start fresh.${ctx !== 
 ${p}init                       Launch the TUI with the setup wizard open
                                Use this to configure or reconfigure API keys and preferences.`,
 
+    config: `**${p}config** — View or change bot settings
+
+${p}config                       List all settings (key, current value, default)
+${p}config <key>                 Show one setting
+${p}config <key> <value>         Update a setting (persisted to bot config)
+
+Values are parsed as JSON when possible, else stored as strings.`,
+
+    review: `**${p}review** — Position close recommendations
+
+${p}review                       Analyze every open position and return HOLD/SELL signals.
+
+For each non-zero position, runs the same edge calc as ${p}analyze and flags
+positions where the edge has reversed by ≥3pp. SELL rows include a ready-to-run
+${p}sell command.`,
+
     help: `**${p}help** — Show help
 
 ${p}help                       Show all commands
@@ -160,6 +181,7 @@ Analysis & Trading:
   buy <ticker> <n> [price] [yes|no]   Buy contracts (price: cents 1-99 or dollars 0.01-0.99)
   sell <ticker> <n> [price] [yes|no]  Sell contracts
   cancel <order_id>                   Cancel a resting order
+  review                              Close recommendations on open positions
 
 Analysis:
   backtest                      Model accuracy scorecard + live edge scanner
@@ -171,6 +193,11 @@ Account:
   portfolio positions           Open positions
   portfolio orders              Resting orders
   portfolio balance             Account balance
+
+Settings:
+  config                        List all bot settings
+  config <key>                  Show a setting
+  config <key> <value>          Update a setting
 
 System:
   init                          Launch with setup wizard (configure API keys)
@@ -189,16 +216,13 @@ Run "kalshi help <command>" for detailed usage.`;
 Quick start:
   /search crypto          Find markets by keyword or theme
   /analyze <ticker>       Deep analysis + trade recommendation
-  /watch --theme crypto   Continuous scan across a theme
+  /review                 Close recommendations on open positions
 
 Discovery:
   /search [theme|ticker|query]   Find markets by keyword or theme
   /search --refresh <query>      Force index rebuild then search
   /search themes                 List all themes and subcategories
   /search edge [--min-edge N]    Scan all markets by Octagon model edge
-  /watch <ticker>                Live price/orderbook feed
-  /watch --theme <theme>         Continuous theme scan (Esc to stop)
-  /watch --refresh               Force index rebuild before watching
 
 Analysis:
   /backtest                      Model accuracy scorecard + live edge scanner
@@ -214,6 +238,15 @@ Account:
   /portfolio positions           Open positions
   /portfolio orders              Resting orders
   /portfolio balance             Account balance
+
+Settings:
+  /config                        List all bot settings
+  /config <key>                  Show a setting
+  /config <key> <value>          Update a setting
+
+Terminal-only:
+  bun start watch <ticker>       Live price/orderbook feed (separate terminal)
+  bun start watch --theme <t>    Continuous theme scan (separate terminal)
 
 System:
   /model                         Change LLM model/provider
