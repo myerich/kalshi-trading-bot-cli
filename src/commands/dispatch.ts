@@ -138,12 +138,11 @@ export async function dispatch(args: ParsedArgs): Promise<void> {
       const subview = resolved.subview ?? args.positionalArgs[0] ?? 'overview';
 
       if (subview === 'positions') {
-        const data = await callKalshiApi('GET', '/portfolio/positions');
-        const allPositions = (data.market_positions ?? data.positions ?? []) as KalshiPosition[];
-        const positions = allPositions.filter((p) => {
-          const pos = parseFloat(String(p.position ?? '0'));
-          return pos !== 0;
+        const data = await callKalshiApi('GET', '/portfolio/positions', {
+          params: { count_filter: 'position' },
         });
+        const allPositions = (data.market_positions ?? []) as KalshiPosition[];
+        const positions = allPositions.filter((p) => parseFloat(p.position_fp) !== 0);
         if (json) {
           console.log(JSON.stringify(wrapSuccess('portfolio:positions', { positions })));
         } else {

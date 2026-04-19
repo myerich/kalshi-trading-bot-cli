@@ -242,13 +242,13 @@ export async function handleAnalyze(
   if (providedPosition === undefined) {
     try {
       const posData = await callKalshiApi('GET', '/portfolio/positions', {
-        params: { ticker: resolvedTicker },
+        params: { ticker: resolvedTicker, count_filter: 'position' },
       });
-      const positions = (posData.market_positions ?? posData.positions ?? []) as KalshiPosition[];
+      const positions = (posData.market_positions ?? []) as KalshiPosition[];
       const match = positions.find((p) => p.ticker === resolvedTicker);
       if (match) {
-        const rawPos = parseFloat(String(match.position ?? '0'));
-        if (rawPos !== 0) {
+        const rawPos = parseFloat(match.position_fp);
+        if (Number.isFinite(rawPos) && rawPos !== 0) {
           existingPosition = {
             direction: rawPos > 0 ? 'yes' : 'no',
             size: Math.abs(Math.round(rawPos)),

@@ -27,13 +27,12 @@ const SELL_THRESHOLD = 0.03; // minimum edge reversal to trigger SELL signal
  * run edge analysis on each, and return HOLD/SELL recommendations.
  */
 export async function reviewPortfolio(): Promise<PositionReview[]> {
-  const data = await callKalshiApi('GET', '/portfolio/positions');
-  const allPositions = (data.market_positions ?? data.positions ?? []) as KalshiPosition[];
-
-  const nonZero = allPositions.filter((p) => {
-    const pos = parseFloat(String(p.position ?? '0'));
-    return pos !== 0;
+  const data = await callKalshiApi('GET', '/portfolio/positions', {
+    params: { count_filter: 'position' },
   });
+  const allPositions = (data.market_positions ?? []) as KalshiPosition[];
+
+  const nonZero = allPositions.filter((p) => parseFloat(p.position_fp) !== 0);
 
   if (nonZero.length === 0) return [];
 
@@ -41,7 +40,7 @@ export async function reviewPortfolio(): Promise<PositionReview[]> {
   // Pass preloaded position to avoid N+1 portfolio fetches inside handleAnalyze
   const results = await Promise.allSettled(
     nonZero.map((p) => {
-      const rawPos = parseFloat(String(p.position ?? '0'));
+      const rawPos = parseFloat(p.position_fp);
       const pos = rawPos !== 0
         ? { direction: (rawPos > 0 ? 'yes' : 'no') as 'yes' | 'no', size: Math.abs(Math.round(rawPos)) }
         : null;
@@ -51,7 +50,7 @@ export async function reviewPortfolio(): Promise<PositionReview[]> {
 
   return results.map((result, i) => {
     const pos = nonZero[i];
-    const rawPos = parseFloat(String(pos.position ?? '0'));
+    const rawPos = parseFloat(pos.position_fp);
     const direction: 'yes' | 'no' = rawPos > 0 ? 'yes' : 'no';
     const size = Math.abs(Math.round(rawPos));
 

@@ -125,20 +125,24 @@ export interface KalshiOrder {
   last_update_time?: string;
 }
 
+/**
+ * Market-level portfolio position — matches GET /portfolio/positions response.
+ * Docs: https://docs.kalshi.com/api-reference/portfolio/get-positions
+ *
+ * Kalshi migrated to fixed-point/dollar-string fields; the legacy integer
+ * `position`, `market_exposure`, `realized_pnl`, `total_traded`, `fees_paid`
+ * and `event_ticker` are no longer emitted on this endpoint.
+ */
 export interface KalshiPosition {
   ticker: string;
-  event_ticker: string;
-  position: number;
-  position_fp?: number;
+  /** Contract count as 2-decimal fixed-point string. Negative = NO, positive = YES. "0.00" means position is closed. */
+  position_fp: string;
+  market_exposure_dollars: string;
+  realized_pnl_dollars: string;
+  total_traded_dollars: string;
+  fees_paid_dollars: string;
   resting_orders_count: number;
-  market_exposure: number;
-  market_exposure_dollars?: string;
-  realized_pnl: number;
-  realized_pnl_dollars?: string;
-  total_traded: number;
-  total_traded_dollars?: string;
-  fees_paid: number;
-  fees_paid_dollars?: string;
+  last_updated_ts: string;
 }
 
 export interface KalshiFill {

@@ -152,11 +152,11 @@ export function formatBalance(data: KalshiBalanceResponse): string {
   return lines.join('\n');
 }
 
-export function formatPositions(positions: any[]): string {
+export function formatPositions(positions: KalshiPosition[]): string {
   if (!positions.length) return 'No open positions.';
 
   const rows = positions.map((p) => {
-    const pos = parsePosition(p.position_fp ?? p.position);
+    const pos = parsePosition(p.position_fp);
     let posStr: string;
     if (pos === undefined) {
       posStr = '-';
@@ -164,14 +164,12 @@ export function formatPositions(positions: any[]): string {
       const rendered = fmtCount(pos);
       posStr = pos > 0 ? `+${rendered}` : rendered === '-' ? '-' : `-${fmtCount(Math.abs(pos))}`;
     }
-    const pnl = p.realized_pnl_dollars ?? (p.realized_pnl !== undefined ? (p.realized_pnl / 100).toFixed(4) : undefined);
-    const exposure = p.market_exposure_dollars ?? (p.market_exposure !== undefined ? (p.market_exposure / 100).toFixed(4) : undefined);
 
     return [
       p.ticker,
       posStr,
-      fmtDollarsAuto(pnl),
-      fmtDollarsAuto(exposure),
+      fmtDollarsAuto(p.realized_pnl_dollars),
+      fmtDollarsAuto(p.market_exposure_dollars),
       String(p.resting_orders_count ?? 0),
     ];
   });

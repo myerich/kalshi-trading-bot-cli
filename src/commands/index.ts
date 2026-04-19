@@ -172,12 +172,13 @@ async function handlePortfolioSlash(subview?: string): Promise<CommandResult> {
 
   try {
     if (view === 'positions') {
-      const data = await callKalshiApi('GET', '/portfolio/positions');
-      const allPositions = (data.market_positions ?? data.positions ?? []) as KalshiPosition[];
-      const positions = allPositions.filter((p) => {
-        const pos = parseFloat(String(p.position ?? '0'));
-        return pos !== 0;
+      const data = await callKalshiApi('GET', '/portfolio/positions', {
+        params: { count_filter: 'position' },
       });
+      const allPositions = (data.market_positions ?? []) as KalshiPosition[];
+      // Belt-and-suspenders: guard against Kalshi ever returning a closed row
+      // (position_fp === "0.00") despite count_filter=position.
+      const positions = allPositions.filter((p) => parseFloat(p.position_fp) !== 0);
       return { output: formatPositions(positions) };
     }
 

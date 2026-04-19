@@ -35,7 +35,13 @@ function restoreApiMock() {
 
 function setMockBankroll(balance: number, payout: number, positions: Array<{ market_exposure: number }>) {
   mockApiResponses['/portfolio/balance'] = { balance, payout, portfolio_value: balance + payout, reserved_fees: 0, fees: 0 };
-  mockApiResponses['/portfolio/positions'] = { market_positions: positions };
+  // Kalshi /portfolio/positions emits dollar strings, not integer cents. Convert the cents-in-test value
+  // so tests mirror the real API shape.
+  mockApiResponses['/portfolio/positions'] = {
+    market_positions: positions.map((p) => ({
+      market_exposure_dollars: (p.market_exposure / 100).toFixed(6),
+    })),
+  };
 }
 
 function makeMarket(overrides: Partial<KalshiMarket> = {}): KalshiMarket {
@@ -460,7 +466,7 @@ describe('Circuit Breaker', () => {
         return { balance: 100000, payout: 5000, portfolio_value: 105000, reserved_fees: 0, fees: 0 } as any;
       }
       if (path === '/portfolio/positions') {
-        return { market_positions: [{ market_exposure: 20000 }] } as any;
+        return { market_positions: [{ market_exposure_dollars: '200.000000' }] } as any;
       }
       return {} as any;
     });

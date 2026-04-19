@@ -45,21 +45,19 @@ export async function fetchLiveBankroll(): Promise<LiveBankroll> {
   const balanceRes = await callKalshiApi("GET", "/portfolio/balance");
   const balance = balanceRes as unknown as KalshiBalance;
 
-  const positionsRes = await callKalshiApi("GET", "/portfolio/positions");
-  const positions = (positionsRes.market_positions ??
-    positionsRes.positions ??
-    []) as KalshiPosition[];
+  // count_filter=position excludes fully-closed rows (position_fp=0) — these
+  // can carry a residual market_exposure_dollars (Kalshi rounding artifact)
+  // which should not count against bankroll.
+  const positionsRes = await callKalshiApi("GET", "/portfolio/positions", {
+    params: { count_filter: "position" },
+  });
+  const positions = (positionsRes.market_positions ?? []) as KalshiPosition[];
 
   const cashBalance = balance.balance;
   const portfolioValue = balance.portfolio_value;
   const openExposure = positions.reduce((sum, p) => {
-    if (p.market_exposure_dollars != null) {
-      const parsed = parseFloat(String(p.market_exposure_dollars).trim());
-      if (Number.isFinite(parsed)) {
-        return sum + Math.round(parsed * 100);
-      }
-    }
-    return sum + (p.market_exposure ?? 0);
+    const parsed = parseFloat(p.market_exposure_dollars);
+    return Number.isFinite(parsed) ? sum + Math.round(parsed * 100) : sum;
   }, 0);
   const availableBankroll = Math.max(0, cashBalance - openExposure);
 

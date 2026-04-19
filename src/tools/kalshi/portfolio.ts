@@ -15,15 +15,25 @@ export const getBalance = new DynamicStructuredTool({
 
 export const getPositions = new DynamicStructuredTool({
   name: 'get_positions',
-  description: 'Get current open positions in Kalshi markets.',
+  description:
+    'Get portfolio positions from Kalshi. Each row has position_fp (signed contract count as a string: positive = YES, negative = NO, "0.00" = closed) and market_exposure_dollars. ' +
+    'Without count_filter, the response includes fully-closed rows (position_fp="0.00") that retain trading history — treat those as closed positions (use get_settlements for settled details). ' +
+    'Pass count_filter="position" to get only currently-open positions.',
   schema: z.object({
     event_ticker: z.string().optional().describe('Filter by event ticker'),
     ticker: z.string().optional().describe('Filter by market ticker'),
+    count_filter: z
+      .enum(['position', 'total_traded', 'position,total_traded'])
+      .optional()
+      .describe(
+        'Server-side filter. "position" = only currently-open (position_fp != 0). "total_traded" = only rows with trading history. Omit to include both open and closed rows.'
+      ),
   }),
   func: async (input) => {
     const params: Record<string, string | undefined> = {};
     if (input.event_ticker) params.event_ticker = input.event_ticker;
     if (input.ticker) params.ticker = input.ticker;
+    if (input.count_filter) params.count_filter = input.count_filter;
     const data = await callKalshiApi('GET', '/portfolio/positions', { params });
     return formatToolResult(data);
   },
